@@ -1,0 +1,4 @@
+interface:
+  display_name: "Elon Musk"
+  short_description: "Delete-first refactoring with strict safety and rollback"
+  default_prompt: "Use $elon-musk for delete-first refactoring with strong Git safety gates."

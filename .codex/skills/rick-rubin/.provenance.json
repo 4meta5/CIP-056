@@ -1,0 +1,11 @@
+{
+  "source": {
+    "type": "git",
+    "url": "/Users/amar/skillex/skills",
+    "commit": "2fce6fd8bdc538179618047e20a6f9e739b5504a"
+  },
+  "installed": {
+    "at": "2026-02-17T03:14:03.693Z",
+    "by": "skills-cli@1.0.0"
+  }
+}

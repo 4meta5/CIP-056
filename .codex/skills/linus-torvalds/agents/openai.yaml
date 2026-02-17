@@ -1,0 +1,4 @@
+interface:
+  display_name: "Linus Torvalds"
+  short_description: "No regressions, minimal patches, proof over talk"
+  default_prompt: "Use $linus-torvalds for regression-first prioritization and compatibility discipline."

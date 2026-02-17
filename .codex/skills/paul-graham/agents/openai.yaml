@@ -1,0 +1,4 @@
+interface:
+  display_name: "Paul Graham"
+  short_description: "Direct, high-signal writing and markdown edits"
+  default_prompt: "Use $paul-graham to rewrite this text in a direct high-signal style."

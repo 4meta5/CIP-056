@@ -1,0 +1,4 @@
+interface:
+  display_name: "Differential Review"
+  short_description: "Security-focused review for diffs and PRs"
+  default_prompt: "Use $diff-review to perform a security-focused diff review."

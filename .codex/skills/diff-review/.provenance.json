@@ -1,0 +1,16 @@
+{
+  "source": {
+    "type": "git",
+    "url": "https://github.com/trailofbits/skills.git",
+    "path": "plugins/differential-review/skills/differential-review",
+    "ref": "main",
+    "commit": "09b6ebe6432eb9e8ca2f59ba54f0c2612cadec8c"
+  },
+  "installed": {
+    "at": "2026-01-30T19:26:00.019Z",
+    "by": "skills-cli@1.0.0"
+  },
+  "updated": {
+    "at": "2026-01-30T20:16:26.284Z"
+  }
+}

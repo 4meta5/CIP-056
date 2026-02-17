@@ -1,0 +1,4 @@
+interface:
+  display_name: "Spec Compliance Checker"
+  short_description: "Spec-to-code compliance analysis workflow"
+  default_prompt: "Use $spec-checker to compare this implementation against the spec."

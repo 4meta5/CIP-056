@@ -1,0 +1,4 @@
+interface:
+  display_name: "Workflow"
+  short_description: "Structured development cycle and phases"
+  default_prompt: "Use $compound-workflow to run this task through the structured development cycle."

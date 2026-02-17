@@ -1,5 +1,6 @@
 dist
 dist-*
+dist-newstyle/
 cabal-dev
 *.o
 *.hi
@@ -21,3 +22,21 @@ cabal.project.local
 cabal.project.local~
 .HTF/
 .ghc.environment.*
+
+# Local agent/IDE/dev environment artifacts
+.daml/
+*.dar
+.DS_Store
+.idea/
+.vscode/
+.envrc.private
+
+# Added by gia guard
+node_modules/
+dist/
+target/
+build/
+.env
+.env.*
+*.log
+.claude/

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Bryan Cantrill"
+  short_description: "Evidence-first engineering with written design and observability"
+  default_prompt: "Use $bryan-cantrill for written design, risk-ordered execution, and observability contracts."

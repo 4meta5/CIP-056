@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fresh Eyes"
+  short_description: "Perspective-shift discipline for plans, code, and bugs"
+  default_prompt: "Use $fresh-eyes to re-examine this work with a fresh perspective."

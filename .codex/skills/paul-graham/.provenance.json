@@ -1,0 +1,11 @@
+{
+  "source": {
+    "type": "git",
+    "url": "/Users/amar/agi/hooks/../skills",
+    "commit": "e50d6dc7fb6668597e32c535b1ee48c82da05039"
+  },
+  "installed": {
+    "at": "2026-02-17T03:14:03.750Z",
+    "by": "skills-cli@1.0.0"
+  }
+}

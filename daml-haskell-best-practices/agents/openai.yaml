@@ -1,0 +1,4 @@
+interface:
+  display_name: "DAML/Haskell Best Practices"
+  short_description: "General SOTA conventions for DAML/Haskell systems"
+  default_prompt: "Use $daml-haskell-best-practices to enforce clean, secure, and readable DAML/Haskell architecture and workflow conventions."

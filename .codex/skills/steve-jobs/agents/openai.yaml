@@ -1,0 +1,4 @@
+interface:
+  display_name: "Steve Jobs"
+  short_description: "Experience-first product planning with ruthless focus"
+  default_prompt: "Use $steve-jobs for experience-first planning, Top-10 enforcement, and shipping discipline."
