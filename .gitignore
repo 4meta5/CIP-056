@@ -38,6 +38,8 @@ AGENTS.md
 .claude/
 .codex/
 
+daml-haskell-best-practices/
+
 # Added by gia guard
 node_modules/
 dist/

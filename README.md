@@ -2,18 +2,18 @@
 
 ## What This Is
 
-Minimal DAML/Haskell implementation of the 6 CIP-056 on-ledger interfaces. Proves a non-Splice registry can implement the Canton token standard and interoperate with standard-compliant wallets. See [SCOPE.md](SCOPE.md) for full scope and [PLAN.md](PLAN.md) for implementation details.
+Minimal DAML/Haskell implementation of the 6 CIP-056 on-ledger interfaces. Proves a non-[Splice](https://github.com/hyperledger-labs/splice) registry can implement the Canton token standard and interoperate with standard-compliant wallets. See [SCOPE.md](SCOPE.md) for full scope and [PLAN.md](PLAN.md) for implementation details.
 
 ## Status
 
-On-ledger: **27/27 tests passing** (7 templates, 6 interfaces, 24 security invariants). Off-ledger: not in scope (uses `../splice/token-standard`).
+On-ledger: **27/27 tests passing** (7 templates, 6 interfaces, 24 security invariants). Off-ledger: not in scope (uses Splice `token-standard`).
 
 ## Prerequisites
 
 - **dpm** (Digital Asset Package Manager): `~/.dpm/bin/dpm`
 - **Daml SDK** 3.4.10
 - **Java 21** (for `dpm test`)
-- Access to `../splice/daml/dars/` (interface DARs linked via `dars/` symlinks)
+- Access to [Splice](https://github.com/hyperledger-labs/splice) interface DARs (linked via `dars/` symlinks)
 
 ## Quick Start
 
