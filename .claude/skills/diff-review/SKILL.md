@@ -7,7 +7,6 @@ description: >-
   Use when: (1) reviewing security-sensitive changes, (2) assessing blast radius
   from a diff, (3) producing an evidence-based security review report.
 category: audit
-allowed-tools: Read,Write,Grep,Glob,Bash
 ---
 
 # Differential Security Review

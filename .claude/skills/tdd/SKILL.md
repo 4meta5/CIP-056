@@ -5,9 +5,6 @@ description: |
   Use when: (1) implementing new features, (2) fixing bugs, (3) refactoring code.
   Blocks progress at each phase until conditions are met. RED -> GREEN -> REFACTOR.
 category: testing
-disable-model-invocation: false
-user-invocable: true
-allowed-tools: Read, Grep, Glob, Bash, Write, Edit
 ---
 
 # Test-Driven Development (TDD) Workflow

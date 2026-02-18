@@ -6,7 +6,6 @@ description: |
   (2) rewriting weak or bloated prose, (3) tightening argument flow and clarity,
   (4) enforcing markdown readability and README structure quality.
 category: documentation
-user-invocable: true
 ---
 
 # Paul Graham

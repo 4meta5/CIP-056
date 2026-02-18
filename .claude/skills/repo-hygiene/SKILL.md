@@ -5,7 +5,6 @@ description: |
   directories accumulate from testing, (2) CLAUDE.md has stale skill references,
   (3) placeholder content exists in skills. Provides scan, clean, and CLAUDE.md sync.
 category: development
-user-invocable: true
 ---
 
 # Repo Hygiene

@@ -6,7 +6,6 @@ description: |
   Use when: (1) legacy code has obvious bloat/duplication, (2) complexity is
   blocking delivery, (3) the team can run tests, feature flags, and rollback.
 category: principles
-user-invocable: true
 ---
 
 # Elon Musk
