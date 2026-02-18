@@ -1,0 +1,94 @@
+-- | Allocation for DvP settlement.
+-- SimpleAllocation: backed by a locked holding, supports execute/cancel/withdraw.
+module SimpleToken.Allocation where
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1
+import Splice.Api.Token.AllocationV1
+
+import SimpleToken.Holding
+
+-- | A funded allocation of holdings to a settlement leg.
+template SimpleAllocation
+  with
+    admin : Party
+    allocation : AllocationSpecification
+    lockedHoldingCid : ContractId LockedSimpleHolding
+  where
+    signatory admin, allocation.transferLeg.sender
+    observer allocation.settlement.executor, allocation.transferLeg.receiver
+
+    interface instance Allocation for SimpleAllocation where
+      view = AllocationView with
+        allocation
+        holdingCids = [toInterfaceContractId @Holding lockedHoldingCid]
+        meta = emptyMetadata
+
+      allocation_executeTransferImpl _selfCid arg = do
+        -- Validate deadline before archival (Gap 8)
+        now <- getTime
+        assertMsg "Settlement has expired (settleBefore passed)"
+          (now < allocation.settlement.settleBefore)
+        lockedHolding <- fetch lockedHoldingCid
+        archive lockedHoldingCid
+        let totalInput = lockedHolding.amount
+            leg = allocation.transferLeg
+        -- Create receiver holding
+        receiverCid <- create SimpleHolding with
+          admin
+          owner = leg.receiver
+          instrumentId = leg.instrumentId
+          amount = leg.amount
+          meta = arg.extraArgs.meta
+        -- Create sender change if needed
+        senderChangeCids <- if totalInput > leg.amount
+          then do
+            changeCid <- create SimpleHolding with
+              admin
+              owner = leg.sender
+              instrumentId = leg.instrumentId
+              amount = totalInput - leg.amount
+              meta = emptyMetadata
+            pure [toInterfaceContractId @Holding changeCid]
+          else pure []
+        pure Allocation_ExecuteTransferResult with
+          senderHoldingCids = senderChangeCids
+          receiverHoldingCids = [toInterfaceContractId @Holding receiverCid]
+          meta = emptyMetadata
+
+      allocation_cancelImpl _selfCid _arg = do
+        -- Cancel: return locked funds to sender
+        releaseAllocatedFunds admin allocation lockedHoldingCid
+
+      allocation_withdrawImpl _selfCid _arg = do
+        -- Validate allocateBefore deadline
+        now <- getTime
+        assertMsg "Cannot withdraw after allocateBefore deadline"
+          (now < allocation.settlement.allocateBefore)
+        lockedHolding <- fetch lockedHoldingCid
+        archive lockedHoldingCid
+        returnCid <- create SimpleHolding with
+          admin
+          owner = allocation.transferLeg.sender
+          instrumentId = allocation.transferLeg.instrumentId
+          amount = lockedHolding.amount
+          meta = emptyMetadata
+        pure Allocation_WithdrawResult with
+          senderHoldingCids = [toInterfaceContractId @Holding returnCid]
+          meta = emptyMetadata
+
+
+-- | Helper: archive locked holding and return unlocked holding to sender (for cancel).
+releaseAllocatedFunds : Party -> AllocationSpecification -> ContractId LockedSimpleHolding -> Update Allocation_CancelResult
+releaseAllocatedFunds admin allocation lockedHoldingCid = do
+  lockedHolding <- fetch lockedHoldingCid
+  archive lockedHoldingCid
+  returnCid <- create SimpleHolding with
+    admin
+    owner = allocation.transferLeg.sender
+    instrumentId = allocation.transferLeg.instrumentId
+    amount = lockedHolding.amount
+    meta = emptyMetadata
+  pure Allocation_CancelResult with
+    senderHoldingCids = [toInterfaceContractId @Holding returnCid]
+    meta = emptyMetadata

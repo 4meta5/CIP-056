@@ -1,0 +1,63 @@
+-- | Transfer preapproval for direct transfers.
+-- Nonconsuming: any sender can transfer to the receiver without consuming this contract.
+module SimpleToken.Preapproval where
+
+import Splice.Api.Token.HoldingV1
+import Splice.Api.Token.MetadataV1
+
+import SimpleToken.Holding
+
+-- | A preapproval that allows any sender to transfer tokens to the receiver.
+-- The TransferPreapproval_Send choice is nonconsuming, making it reusable.
+-- The choice creates the receiver holding (and sender change) using the receiver's
+-- signatory authorization from this contract.
+template TransferPreapproval
+  with
+    admin : Party
+    receiver : Party
+    instrumentId : InstrumentId
+    expiresAt : Optional Time
+    meta : Metadata
+  where
+    signatory admin, receiver
+
+    -- | Nonconsuming: validates instrument match, creates receiver holding + sender change.
+    -- Returns (receiverHoldingCids, senderChangeCids).
+    nonconsuming choice TransferPreapproval_Send : ([ContractId Holding], [ContractId Holding])
+      with
+        sender : Party
+        transferInstrumentId : InstrumentId
+        amount : Decimal
+        totalInput : Decimal
+        holdingMeta : Metadata
+      controller admin, sender
+      do
+        -- Invariant #16: preapproval.instrumentId == transfer.instrumentId
+        assertMsg "Preapproval instrumentId does not match transfer instrumentId"
+          (instrumentId == transferInstrumentId)
+        -- Check expiry if set
+        now <- getTime
+        case expiresAt of
+          None -> pure ()
+          Some deadline ->
+            assertMsg "Transfer preapproval has expired"
+              (now < deadline)
+        -- Create receiver holding (receiver auth available as signatory of this contract)
+        receiverCid <- create SimpleHolding with
+          admin
+          owner = receiver
+          instrumentId = transferInstrumentId
+          amount
+          meta = holdingMeta
+        -- Create sender change if needed
+        senderChangeCids <- if totalInput > amount
+          then do
+            changeCid <- create SimpleHolding with
+              admin
+              owner = sender
+              instrumentId = transferInstrumentId
+              amount = totalInput - amount
+              meta = emptyMetadata
+            pure [toInterfaceContractId @Holding changeCid]
+          else pure []
+        pure ([toInterfaceContractId @Holding receiverCid], senderChangeCids)

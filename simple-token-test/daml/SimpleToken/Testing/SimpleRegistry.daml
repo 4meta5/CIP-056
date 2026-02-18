@@ -1,0 +1,164 @@
+-- | SimpleRegistry: off-ledger API simulation for tests.
+-- Mirrors Splice's AmuletRegistry pattern but much simpler (no mining rounds, no fees).
+module SimpleToken.Testing.SimpleRegistry where
+
+import DA.TextMap qualified as TextMap
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1
+import Splice.Api.Token.TransferInstructionV1
+import Splice.Api.Token.AllocationInstructionV1
+
+import SimpleToken.Holding
+import SimpleToken.Rules
+import SimpleToken.Preapproval
+import SimpleToken.ContextUtils
+
+import Daml.Script
+
+-- | Reference to a simple token registry.
+data SimpleRegistry = SimpleRegistry with
+    admin : Party
+    instrumentId : InstrumentId
+  deriving (Eq, Ord, Show)
+
+-- | Disclosed contracts wrapper (simple list).
+data Disclosures = Disclosures with
+    disclosureList : [Disclosure]
+
+instance Monoid Disclosures where
+  mempty = Disclosures with disclosureList = []
+
+instance Semigroup Disclosures where
+  (Disclosures ds1) <> (Disclosures ds2) =
+    Disclosures with disclosureList = ds1 <> ds2
+
+-- | A factory choice enriched with context and disclosures.
+data EnrichedChoice t ch = EnrichedChoice with
+  factoryCid : ContractId t
+  arg : ch
+  disclosures : Disclosures
+
+-- | Query a disclosure for a contract.
+queryDisc : forall t. Template t => Party -> ContractId t -> Script Disclosures
+queryDisc p cid = do
+  optDisc <- queryDisclosure @t p cid
+  case optDisc of
+    None -> fail $ "Disclosure not found for: " <> show cid
+    Some d -> pure Disclosures with disclosureList = [d]
+
+-- | Submit a command with disclosures.
+submitWithDisc : Party -> Disclosures -> Commands a -> Script a
+submitWithDisc p (Disclosures ds) cmds = submitWithDisclosures p ds cmds
+
+-- | Submit a command that must fail, with disclosures.
+submitWithDiscMustFail : Party -> Disclosures -> Commands a -> Script ()
+submitWithDiscMustFail p (Disclosures ds) cmds = submitWithDisclosuresMustFail p ds cmds
+
+-- | Initialize a simple registry.
+initialize : Text -> Text -> Script SimpleRegistry
+initialize adminName instrumentName = do
+  admin <- allocatePartyByHint (PartyIdHint adminName)
+  let instrumentId = InstrumentId with admin; id = instrumentName
+  -- Create the factory
+  _ <- submit admin $ createCmd SimpleTokenRules with
+    admin
+    supportedInstruments = [instrumentName]
+  pure SimpleRegistry with admin; instrumentId
+
+-- | Initialize a multi-instrument registry.
+initializeMulti : Text -> [Text] -> Script SimpleRegistry
+initializeMulti adminName instrumentNames = do
+  admin <- allocatePartyByHint (PartyIdHint adminName)
+  let firstInstrument = case instrumentNames of
+        (x :: _) -> x
+        [] -> error "initializeMulti: empty instrument list"
+  let instrumentId = InstrumentId with admin; id = firstInstrument
+  _ <- submit admin $ createCmd SimpleTokenRules with
+    admin
+    supportedInstruments = instrumentNames
+  pure SimpleRegistry with admin; instrumentId
+
+-- | Create a holding for a party (admin + owner must sign).
+createHolding : SimpleRegistry -> Party -> Decimal -> Script (ContractId Holding)
+createHolding registry owner amount = do
+  cid <- submitMulti [registry.admin, owner] [] $ createCmd SimpleHolding with
+    admin = registry.admin
+    owner
+    instrumentId = registry.instrumentId
+    amount
+    meta = emptyMetadata
+  pure (toInterfaceContractId @Holding cid)
+
+-- | Create a holding for a specific instrument (for multi-instrument tests).
+createHoldingForInstrument : Party -> Party -> InstrumentId -> Decimal -> Script (ContractId Holding)
+createHoldingForInstrument admin owner instrumentId amount = do
+  cid <- submitMulti [admin, owner] [] $ createCmd SimpleHolding with
+    admin
+    owner
+    instrumentId
+    amount
+    meta = emptyMetadata
+  pure (toInterfaceContractId @Holding cid)
+
+-- | Create a transfer preapproval for a receiver.
+createPreapproval : SimpleRegistry -> Party -> Optional Time -> Script (ContractId TransferPreapproval)
+createPreapproval registry receiver expiresAt = do
+  submitMulti [registry.admin, receiver] [] $ createCmd TransferPreapproval with
+    admin = registry.admin
+    receiver
+    instrumentId = registry.instrumentId
+    expiresAt
+    meta = emptyMetadata
+
+-- | Get the transfer factory enriched choice for a transfer.
+getTransferFactory : SimpleRegistry -> Transfer -> ExtraArgs -> Script (EnrichedChoice TransferFactory TransferFactory_Transfer)
+getTransferFactory registry transfer extraArgs = do
+  [(rulesCid, _)] <- query @SimpleTokenRules registry.admin
+  let tfCid = toInterfaceContractId @TransferFactory rulesCid
+  rulesDisc <- queryDisc @SimpleTokenRules registry.admin rulesCid
+  -- Check for preapproval if not self-transfer
+  (preapprovalC, preapprovalD) <-
+    if transfer.sender == transfer.receiver
+      then pure (emptyChoiceContext, mempty)
+      else lookupPreapprovalContext registry transfer.receiver
+  let fullContext = ChoiceContext with
+        values = extraArgs.context.values <> preapprovalC.values
+  pure EnrichedChoice with
+    factoryCid = tfCid
+    arg = TransferFactory_Transfer with
+      expectedAdmin = registry.admin
+      transfer
+      extraArgs = extraArgs with context = fullContext
+    disclosures = rulesDisc <> preapprovalD
+
+-- | Get the allocation factory enriched choice.
+getAllocationFactory : SimpleRegistry -> AllocationFactory_Allocate -> Script (EnrichedChoice AllocationFactory AllocationFactory_Allocate)
+getAllocationFactory registry arg = do
+  [(rulesCid, _)] <- query @SimpleTokenRules registry.admin
+  let afCid = toInterfaceContractId @AllocationFactory rulesCid
+  rulesDisc <- queryDisc @SimpleTokenRules registry.admin rulesCid
+  pure EnrichedChoice with
+    factoryCid = afCid
+    arg = arg with expectedAdmin = registry.admin
+    disclosures = rulesDisc
+
+-- | Look up preapproval context for a receiver.
+lookupPreapprovalContext : SimpleRegistry -> Party -> Script (ChoiceContext, Disclosures)
+lookupPreapprovalContext registry receiver = do
+  preapprovals <- queryFilter @TransferPreapproval registry.admin
+    (\p -> p.receiver == receiver && p.instrumentId == registry.instrumentId)
+  case preapprovals of
+    [] -> pure (emptyChoiceContext, mempty)
+    (preapprovalCid, _) :: _ -> do
+      preapprovalDisc <- queryDisc @TransferPreapproval registry.admin preapprovalCid
+      let ctx = ChoiceContext with
+            values = TextMap.fromList
+              [(transferPreapprovalContextKey, AV_ContractId (coerceContractId preapprovalCid))]
+      pure (ctx, preapprovalDisc)
+
+-- | Empty extra args.
+emptyExtraArgs : ExtraArgs
+emptyExtraArgs = ExtraArgs with
+  context = emptyChoiceContext
+  meta = emptyMetadata

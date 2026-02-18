@@ -1,0 +1,136 @@
+-- | Choice context utilities for the simple token standard.
+-- Copied from Splice.Amulet.TokenApiUtils to avoid transitive dependency on splice-amulet.
+module SimpleToken.ContextUtils where
+
+import DA.TextMap (TextMap)
+import DA.TextMap qualified as TextMap
+import DA.Time (RelTime)
+
+import Splice.Api.Token.MetadataV1
+
+-- Choice context key constants
+--------------------------------
+
+transferPreapprovalContextKey : Text
+transferPreapprovalContextKey = "transfer-preapproval"
+
+-- ToAnyValue / FromAnyValue typeclasses
+-----------------------------------------
+
+class ToAnyValue a where
+  toAnyValue : a -> AnyValue
+
+class FromAnyValue a where
+  fromAnyValue : AnyValue -> Either Text a
+
+-- Lookup and decode a value within a choice context.
+lookupFromContext : FromAnyValue a => ChoiceContext -> Text -> Either Text (Optional a)
+lookupFromContext context k = do
+  case TextMap.lookup k context.values of
+    None -> pure None
+    Some av -> case fromAnyValue av of
+      Left err -> fail $ "Failed to decode context value for '" <> k <> "': " <> err
+      Right v -> pure (Some v)
+
+-- Convenience version that raises failure within Update.
+lookupFromContextU : FromAnyValue a => ChoiceContext -> Text -> Update (Optional a)
+lookupFromContextU context k = either fail pure $ lookupFromContext context k
+
+-- Get a required value from context, failing if missing.
+getFromContext : FromAnyValue a => ChoiceContext -> Text -> Either Text a
+getFromContext context k = do
+  optValue <- lookupFromContext context k
+  case optValue of
+    None -> fail $ "Missing context entry for: " <> k
+    Some v -> pure v
+
+getFromContextU : FromAnyValue a => ChoiceContext -> Text -> Update a
+getFromContextU context k = either fail pure $ getFromContext context k
+
+-- Add optional value to context map.
+addOptionalAnyValue : ToAnyValue a => Text -> Optional a -> TextMap AnyValue -> TextMap AnyValue
+addOptionalAnyValue _k None m = m
+addOptionalAnyValue k (Some value) m = TextMap.insert k (toAnyValue value) m
+
+-- ToAnyValue instances
+------------------------
+
+instance ToAnyValue Text where
+  toAnyValue t = AV_Text t
+
+instance ToAnyValue Int where
+  toAnyValue x = AV_Int x
+
+instance ToAnyValue Decimal where
+  toAnyValue t = AV_Decimal t
+
+instance ToAnyValue Bool where
+  toAnyValue x = AV_Bool x
+
+instance ToAnyValue Date where
+  toAnyValue x = AV_Date x
+
+instance ToAnyValue Time where
+  toAnyValue x = AV_Time x
+
+instance ToAnyValue RelTime where
+  toAnyValue x = AV_RelTime x
+
+instance ToAnyValue Party where
+  toAnyValue p = AV_Party p
+
+instance ToAnyValue (ContractId t) where
+  toAnyValue x = AV_ContractId $ coerceContractId x
+
+instance ToAnyValue a => ToAnyValue [a] where
+  toAnyValue = AV_List . map toAnyValue
+
+instance ToAnyValue ChoiceContext where
+  toAnyValue (ChoiceContext values) = AV_Map values
+
+-- FromAnyValue instances
+--------------------------
+
+instance FromAnyValue Text where
+  fromAnyValue (AV_Text t) = Right t
+  fromAnyValue av = Left $ "expected Text, got: " <> show av
+
+instance FromAnyValue Int where
+  fromAnyValue (AV_Int i) = Right i
+  fromAnyValue av = Left $ "expected Int, got: " <> show av
+
+instance FromAnyValue Decimal where
+  fromAnyValue (AV_Decimal i) = Right i
+  fromAnyValue av = Left $ "expected Decimal, got: " <> show av
+
+instance FromAnyValue Bool where
+  fromAnyValue (AV_Bool b) = Right b
+  fromAnyValue av = Left $ "expected Bool, got: " <> show av
+
+instance FromAnyValue Date where
+  fromAnyValue (AV_Date p) = Right p
+  fromAnyValue av = Left $ "expected Date, got: " <> show av
+
+instance FromAnyValue Time where
+  fromAnyValue (AV_Time t) = Right t
+  fromAnyValue av = Left $ "expected Time, got: " <> show av
+
+instance FromAnyValue RelTime where
+  fromAnyValue (AV_RelTime t) = Right t
+  fromAnyValue av = Left $ "expected RelTime, got: " <> show av
+
+instance FromAnyValue Party where
+  fromAnyValue (AV_Party p) = Right p
+  fromAnyValue av = Left $ "expected Party, got: " <> show av
+
+instance Template t => FromAnyValue (ContractId t) where
+  fromAnyValue (AV_ContractId av) = Right (coerceContractId av)
+  fromAnyValue av = Left $ "expected contract id, got: " <> show av
+
+instance FromAnyValue a => FromAnyValue [a] where
+  fromAnyValue (AV_List avs) = mapA fromAnyValue avs
+  fromAnyValue av = Left $ "expected list, got: " <> show av
+
+instance FromAnyValue ChoiceContext where
+  fromAnyValue (AV_Map values) = Right $ ChoiceContext with values
+  fromAnyValue av = Left $ "expected map, got: " <> show av

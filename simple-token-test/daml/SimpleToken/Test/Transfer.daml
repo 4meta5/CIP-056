@@ -1,0 +1,180 @@
+-- | Transfer lifecycle tests (7 tests).
+module SimpleToken.Test.Transfer where
+
+import DA.Date
+import DA.Time
+import DA.Optional (fromSome)
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1
+import Splice.Api.Token.TransferInstructionV1
+
+import SimpleToken.Testing.SimpleRegistry
+import SimpleToken.Testing.WalletClient
+import SimpleToken.Test.Setup
+
+import Daml.Script
+
+-- | Helper: make a standard transfer spec.
+mkTransfer : SimpleRegistry -> Party -> Party -> Decimal -> [ContractId Holding] -> Transfer
+mkTransfer registry sender receiver amount inputCids =
+  Transfer with
+    sender; receiver; amount
+    instrumentId = registry.instrumentId
+    requestedAt = demoTime
+    executeBefore = futureDeadline
+    inputHoldingCids = inputCids
+    meta = emptyMetadata
+
+-- Test 1: Self-transfer (merge 2 holdings)
+test_selfTransfer : Script ()
+test_selfTransfer = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  -- Fund alice with 2 holdings
+  [h1] <- fundParty registry alice 60.0
+  [h2] <- fundParty registry alice 40.0
+  -- Self-transfer: merge into 80.0 + 20.0 change
+  let transfer = mkTransfer registry alice alice 80.0 [h1, h2]
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  result <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  -- Verify: completed with 80.0 holding
+  case result.output of
+    TransferInstructionResult_Completed receiverCids -> do
+      assert (length receiverCids == 1)
+    _ -> fail "Expected Completed"
+  -- Verify balance: 80.0 + 20.0 change = 100.0
+  checkBalance alice registry.instrumentId 100.0
+
+-- Test 2: Self-transfer exact amount (no change)
+test_selfTransferExactAmount : Script ()
+test_selfTransferExactAmount = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  [h1] <- fundParty registry alice 50.0
+  [h2] <- fundParty registry alice 50.0
+  let transfer = mkTransfer registry alice alice 100.0 [h1, h2]
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  result <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  case result.output of
+    TransferInstructionResult_Completed _ -> pure ()
+    _ -> fail "Expected Completed"
+  -- No change should be created
+  assert (null result.senderChangeCids)
+  checkBalance alice registry.instrumentId 100.0
+
+-- Test 3: Direct transfer with preapproval
+test_directTransferWithPreapproval : Script ()
+test_directTransferWithPreapproval = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+  [h1] <- fundParty registry alice 100.0
+  -- Create preapproval for bob
+  _ <- createPreapproval registry bob None
+  -- Transfer 70.0 from alice to bob
+  let transfer = mkTransfer registry alice bob 70.0 [h1]
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  result <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  -- Verify: completed
+  case result.output of
+    TransferInstructionResult_Completed receiverCids -> do
+      assert (length receiverCids == 1)
+    _ -> fail "Expected Completed"
+  -- Alice has 30.0 change
+  checkBalance alice registry.instrumentId 30.0
+  -- Bob has 70.0
+  checkBalance bob registry.instrumentId 70.0
+
+-- Test 4: Two-step transfer -> Pending
+test_twoStepTransferPending : Script ()
+test_twoStepTransferPending = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+  [h1] <- fundParty registry alice 100.0
+  -- No preapproval for bob -> two-step
+  let transfer = mkTransfer registry alice bob 70.0 [h1]
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  result <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  -- Verify: pending
+  case result.output of
+    TransferInstructionResult_Pending instrCid -> do
+      -- Verify instruction exists
+      offers <- listTransferOffers bob registry.instrumentId
+      assert (length offers == 1)
+    _ -> fail "Expected Pending"
+
+-- Test 5: Two-step transfer -> Accept -> Completed
+test_twoStepTransferAccept : Script ()
+test_twoStepTransferAccept = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+  [h1] <- fundParty registry alice 100.0
+  let transfer = mkTransfer registry alice bob 70.0 [h1]
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  result <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  case result.output of
+    TransferInstructionResult_Pending instrCid -> do
+      -- Bob accepts
+      acceptResult <- submit bob $ exerciseCmd instrCid TransferInstruction_Accept with
+        extraArgs = emptyExtraArgs
+      case acceptResult.output of
+        TransferInstructionResult_Completed receiverCids -> do
+          assert (length receiverCids == 1)
+        _ -> fail "Expected Completed after accept"
+      -- Bob has 70.0
+      checkBalance bob registry.instrumentId 70.0
+    _ -> fail "Expected Pending"
+
+-- Test 6: Two-step transfer -> Reject -> Failed (funds returned)
+test_twoStepTransferReject : Script ()
+test_twoStepTransferReject = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+  [h1] <- fundParty registry alice 100.0
+  let transfer = mkTransfer registry alice bob 100.0 [h1]
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  result <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  case result.output of
+    TransferInstructionResult_Pending instrCid -> do
+      -- Bob rejects
+      rejectResult <- submit bob $ exerciseCmd instrCid TransferInstruction_Reject with
+        extraArgs = emptyExtraArgs
+      case rejectResult.output of
+        TransferInstructionResult_Failed -> pure ()
+        _ -> fail "Expected Failed after reject"
+      -- Alice gets funds back
+      checkBalance alice registry.instrumentId 100.0
+    _ -> fail "Expected Pending"
+
+-- Test 7: Two-step transfer -> Withdraw -> Failed (funds returned)
+test_twoStepTransferWithdraw : Script ()
+test_twoStepTransferWithdraw = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+  [h1] <- fundParty registry alice 100.0
+  let transfer = mkTransfer registry alice bob 100.0 [h1]
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  result <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  case result.output of
+    TransferInstructionResult_Pending instrCid -> do
+      -- Alice withdraws
+      withdrawResult <- submit alice $ exerciseCmd instrCid TransferInstruction_Withdraw with
+        extraArgs = emptyExtraArgs
+      case withdrawResult.output of
+        TransferInstructionResult_Failed -> pure ()
+        _ -> fail "Expected Failed after withdraw"
+      -- Alice gets funds back
+      checkBalance alice registry.instrumentId 100.0
+    _ -> fail "Expected Pending"

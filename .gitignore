@@ -26,10 +26,17 @@ cabal.project.local~
 # Local agent/IDE/dev environment artifacts
 .daml/
 *.dar
+!dars/*
 .DS_Store
 .idea/
 .vscode/
 .envrc.private
+
+# Agent config (private to local dev)
+CLAUDE.md
+AGENTS.md
+.claude/
+.codex/
 
 # Added by gia guard
 node_modules/

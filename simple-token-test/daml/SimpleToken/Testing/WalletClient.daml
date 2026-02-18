@@ -1,0 +1,57 @@
+-- | Test wallet helpers: list holdings, check balances, list transfer offers.
+module SimpleToken.Testing.WalletClient where
+
+import DA.Action (unless)
+import DA.Optional (isSome)
+
+import Splice.Api.Token.HoldingV1 as HoldingV1
+import Splice.Api.Token.TransferInstructionV1
+
+import Daml.Script
+
+-- | List holdings of a party for a specific instrument.
+listHoldings : Party -> InstrumentId -> Script [(ContractId Holding, HoldingView)]
+listHoldings p instrumentId = do
+  holdings <- queryInterface @Holding p
+  let filtered = do
+        (cid, Some hv) <- holdings
+        guard (hv.instrumentId == instrumentId)
+        guard (hv.owner == p)
+        pure (cid, hv)
+  pure filtered
+
+-- | List just the holding CIDs.
+listHoldingCids : Party -> InstrumentId -> Script [ContractId Holding]
+listHoldingCids p instrumentId = (map fst) <$> listHoldings p instrumentId
+
+-- | List locked holdings.
+listLockedHoldings : Party -> InstrumentId -> Script [(ContractId Holding, HoldingView)]
+listLockedHoldings p instrumentId =
+  filter (\(_, hv) -> isSome hv.lock) <$> listHoldings p instrumentId
+
+-- | Check exact balance.
+checkBalance : Party -> InstrumentId -> Decimal -> Script ()
+checkBalance p instrumentId expected = do
+  holdings <- listHoldings p instrumentId
+  let total = sum $ map (._2.amount) holdings
+  unless (total == expected) $ fail $
+    show p <> ": balance " <> show total <> " /= expected " <> show expected
+
+-- | Check that a holding with a specific amount exists.
+checkHoldingWithAmountExists : Party -> InstrumentId -> Decimal -> Script ()
+checkHoldingWithAmountExists p instrumentId amount = do
+  holdings <- map snd <$> listHoldings p instrumentId
+  unless (any (\hv -> hv.amount == amount) holdings) $
+    fail (show p <> " is missing holding of value " <> show amount)
+
+-- | List pending transfer offers.
+listTransferOffers : Party -> InstrumentId -> Script [(ContractId TransferInstruction, TransferInstructionView)]
+listTransferOffers p instrumentId = do
+  instrs <- queryInterface @TransferInstruction p
+  let pendingOffers = do
+        (cid, Some iv) <- instrs
+        guard (iv.transfer.instrumentId == instrumentId)
+        guard (iv.status == TransferPendingReceiverAcceptance)
+        guard (p == iv.transfer.sender || p == iv.transfer.receiver)
+        pure (cid, iv)
+  pure pendingOffers

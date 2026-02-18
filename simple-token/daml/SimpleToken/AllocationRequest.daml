@@ -1,0 +1,31 @@
+-- | Allocation request template for DvP test scenarios.
+-- Allows an executor to request allocations from senders.
+module SimpleToken.AllocationRequest where
+
+import DA.TextMap qualified as TextMap
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.AllocationV1
+import Splice.Api.Token.AllocationRequestV1
+
+-- | A request for allocations, created by the executor.
+template SimpleAllocationRequest
+  with
+    settlement : SettlementInfo
+    transferLegs : TextMap.TextMap TransferLeg
+    senders : [Party]
+  where
+    signatory settlement.executor
+    observer senders
+
+    interface instance AllocationRequest for SimpleAllocationRequest where
+      view = AllocationRequestView with
+        settlement
+        transferLegs
+        meta = emptyMetadata
+
+      allocationRequest_RejectImpl selfCid arg = do
+        pure ChoiceExecutionMetadata with meta = emptyMetadata
+
+      allocationRequest_WithdrawImpl selfCid arg = do
+        pure ChoiceExecutionMetadata with meta = emptyMetadata

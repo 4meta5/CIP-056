@@ -1,0 +1,87 @@
+-- | Transfer instruction for two-step transfers.
+-- Created when receiver has no preapproval; requires explicit accept/reject/withdraw.
+module SimpleToken.TransferInstruction where
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1
+import Splice.Api.Token.TransferInstructionV1
+
+import SimpleToken.Holding
+
+-- | A pending transfer instruction backed by a locked holding.
+template SimpleTransferInstruction
+  with
+    admin : Party
+    transfer : Transfer
+    lockedHoldingCid : ContractId LockedSimpleHolding
+    originalInstructionCid : Optional (ContractId TransferInstruction)
+  where
+    signatory admin, transfer.sender
+    observer transfer.receiver
+
+    interface instance TransferInstruction for SimpleTransferInstruction where
+      view = TransferInstructionView with
+        originalInstructionCid
+        transfer
+        status = TransferPendingReceiverAcceptance
+        meta = emptyMetadata
+
+      transferInstruction_acceptImpl selfCid arg = do
+        -- Validate deadline before any archival (Gap 8)
+        now <- getTime
+        assertMsg "Transfer has expired (executeBefore passed)"
+          (now < transfer.executeBefore)
+        lockedHolding <- fetch lockedHoldingCid
+        archive lockedHoldingCid
+        let totalInput = lockedHolding.amount
+        -- Create receiver holding
+        receiverCid <- create SimpleHolding with
+          admin
+          owner = transfer.receiver
+          instrumentId = transfer.instrumentId
+          amount = transfer.amount
+          meta = arg.extraArgs.meta
+        -- Create sender change if needed
+        senderChangeCids <- if totalInput > transfer.amount
+          then do
+            changeCid <- create SimpleHolding with
+              admin
+              owner = transfer.sender
+              instrumentId = transfer.instrumentId
+              amount = totalInput - transfer.amount
+              meta = emptyMetadata
+            pure [toInterfaceContractId @Holding changeCid]
+          else pure []
+        pure TransferInstructionResult with
+          output = TransferInstructionResult_Completed with
+            receiverHoldingCids = [toInterfaceContractId @Holding receiverCid]
+          senderChangeCids
+          meta = emptyMetadata
+
+      transferInstruction_rejectImpl _selfCid _arg = do
+        -- Reject: return locked funds to sender
+        returnLockedFundsToSender admin transfer lockedHoldingCid
+
+      transferInstruction_withdrawImpl _selfCid _arg = do
+        -- Withdraw: return locked funds to sender
+        returnLockedFundsToSender admin transfer lockedHoldingCid
+
+      transferInstruction_updateImpl _selfCid _arg = do
+        fail "TransferInstruction_Update is not supported"
+
+
+-- | Helper: archive locked holding and return unlocked holding to sender.
+returnLockedFundsToSender : Party -> Transfer -> ContractId LockedSimpleHolding -> Update TransferInstructionResult
+returnLockedFundsToSender admin transfer lockedHoldingCid = do
+  lockedHolding <- fetch lockedHoldingCid
+  archive lockedHoldingCid
+  returnCid <- create SimpleHolding with
+    admin
+    owner = transfer.sender
+    instrumentId = transfer.instrumentId
+    amount = lockedHolding.amount
+    meta = emptyMetadata
+  pure TransferInstructionResult with
+    output = TransferInstructionResult_Failed
+    senderChangeCids = [toInterfaceContractId @Holding returnCid]
+    meta = emptyMetadata

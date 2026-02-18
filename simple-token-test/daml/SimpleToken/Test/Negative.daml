@@ -1,0 +1,306 @@
+-- | Security and negative tests (12 tests).
+module SimpleToken.Test.Negative where
+
+import DA.Date
+import DA.Time
+import DA.TextMap qualified as TextMap
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1
+import Splice.Api.Token.TransferInstructionV1
+
+import SimpleToken.Holding
+import SimpleToken.Rules
+import SimpleToken.Preapproval
+import SimpleToken.ContextUtils
+import SimpleToken.Testing.SimpleRegistry
+import SimpleToken.Testing.WalletClient
+import SimpleToken.Test.Setup
+
+import Daml.Script
+
+-- Helper: make a transfer and try to submit it (returns the enriched choice for custom submission)
+mkAndGetTransfer : SimpleRegistry -> Party -> Party -> Decimal -> [ContractId Holding] -> Script (EnrichedChoice TransferFactory TransferFactory_Transfer)
+mkAndGetTransfer registry sender receiver amount inputCids = do
+  let transfer = Transfer with
+        sender; receiver; amount
+        instrumentId = registry.instrumentId
+        requestedAt = demoTime
+        executeBefore = futureDeadline
+        inputHoldingCids = inputCids
+        meta = emptyMetadata
+  getTransferFactory registry transfer emptyExtraArgs
+
+-- Test 13: Wrong expectedAdmin
+test_wrongExpectedAdmin : Script ()
+test_wrongExpectedAdmin = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  [h1] <- fundParty registry alice 100.0
+  wrongAdmin <- allocatePartyByHint (PartyIdHint "wrong-admin")
+  [(rulesCid, _)] <- query @SimpleTokenRules registry.admin
+  let tfCid = toInterfaceContractId @TransferFactory rulesCid
+  rulesDisc <- queryDisc @SimpleTokenRules registry.admin rulesCid
+  let transfer = Transfer with
+        sender = alice; receiver = alice; amount = 50.0
+        instrumentId = registry.instrumentId
+        requestedAt = demoTime; executeBefore = futureDeadline
+        inputHoldingCids = [h1]; meta = emptyMetadata
+  submitWithDiscMustFail alice rulesDisc $
+    exerciseCmd tfCid TransferFactory_Transfer with
+      expectedAdmin = wrongAdmin
+      transfer
+      extraArgs = emptyExtraArgs
+
+-- Test 14: Future requestedAt
+test_futureRequestedAt : Script ()
+test_futureRequestedAt = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  [h1] <- fundParty registry alice 100.0
+  let transfer = Transfer with
+        sender = alice; receiver = alice; amount = 50.0
+        instrumentId = registry.instrumentId
+        requestedAt = time (date 2025 Jan 1) 0 0 0  -- future
+        executeBefore = futureDeadline
+        inputHoldingCids = [h1]; meta = emptyMetadata
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  submitWithDiscMustFail alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+
+-- Test 15: Expired executeBefore
+test_expiredExecuteBefore : Script ()
+test_expiredExecuteBefore = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  [h1] <- fundParty registry alice 100.0
+  let transfer = Transfer with
+        sender = alice; receiver = alice; amount = 50.0
+        instrumentId = registry.instrumentId
+        requestedAt = demoTime
+        executeBefore = time (date 2023 Jan 1) 0 0 0  -- in the past
+        inputHoldingCids = [h1]; meta = emptyMetadata
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  submitWithDiscMustFail alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+
+-- Test 16: Non-positive amount
+test_nonPositiveAmount : Script ()
+test_nonPositiveAmount = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  [h1] <- fundParty registry alice 100.0
+  let transfer = Transfer with
+        sender = alice; receiver = alice; amount = 0.0
+        instrumentId = registry.instrumentId
+        requestedAt = demoTime; executeBefore = futureDeadline
+        inputHoldingCids = [h1]; meta = emptyMetadata
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  submitWithDiscMustFail alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+
+-- Test 17: Wrong instrumentId
+test_wrongInstrumentId : Script ()
+test_wrongInstrumentId = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  [h1] <- fundParty registry alice 100.0
+  let badInstrumentId = InstrumentId with admin = registry.admin; id = "WrongToken"
+  let transfer = Transfer with
+        sender = alice; receiver = alice; amount = 50.0
+        instrumentId = badInstrumentId
+        requestedAt = demoTime; executeBefore = futureDeadline
+        inputHoldingCids = [h1]; meta = emptyMetadata
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  submitWithDiscMustFail alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+
+-- Test 18: Empty input holdings
+test_emptyInputHoldings : Script ()
+test_emptyInputHoldings = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  let transfer = Transfer with
+        sender = alice; receiver = alice; amount = 50.0
+        instrumentId = registry.instrumentId
+        requestedAt = demoTime; executeBefore = futureDeadline
+        inputHoldingCids = []; meta = emptyMetadata
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  submitWithDiscMustFail alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+
+-- Test 19: Holding contention -- two transfers using same holding, one fails
+test_holdingContention : Script ()
+test_holdingContention = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+  [h1] <- fundParty registry alice 100.0
+  -- Create preapproval for bob so both are direct transfers
+  _ <- createPreapproval registry bob None
+  -- First transfer succeeds
+  let transfer1 = Transfer with
+        sender = alice; receiver = bob; amount = 50.0
+        instrumentId = registry.instrumentId
+        requestedAt = demoTime; executeBefore = futureDeadline
+        inputHoldingCids = [h1]; meta = emptyMetadata
+  enriched1 <- getTransferFactory registry transfer1 emptyExtraArgs
+  _ <- submitWithDisc alice enriched1.disclosures $
+    exerciseCmd enriched1.factoryCid enriched1.arg
+  -- Second transfer with same holding must fail (already archived)
+  enriched2 <- getTransferFactory registry transfer1 emptyExtraArgs
+  submitWithDiscMustFail alice enriched2.disclosures $
+    exerciseCmd enriched2.factoryCid enriched2.arg
+
+-- Test 20: Unauthorized accept (non-receiver tries to accept)
+test_unauthorizedAccept : Script ()
+test_unauthorizedAccept = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+      charlie = parties.charlie
+  [h1] <- fundParty registry alice 100.0
+  let transfer = Transfer with
+        sender = alice; receiver = bob; amount = 100.0
+        instrumentId = registry.instrumentId
+        requestedAt = demoTime; executeBefore = futureDeadline
+        inputHoldingCids = [h1]; meta = emptyMetadata
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  result <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  case result.output of
+    TransferInstructionResult_Pending instrCid -> do
+      -- Charlie (not receiver) tries to accept -> must fail
+      submitMustFail charlie $ exerciseCmd instrCid TransferInstruction_Accept with
+        extraArgs = emptyExtraArgs
+    _ -> fail "Expected Pending"
+
+-- Test 21: Expired transfer accept (after executeBefore)
+test_expiredTransferAccept : Script ()
+test_expiredTransferAccept = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+  [h1] <- fundParty registry alice 100.0
+  -- Use a near-future deadline
+  let nearFuture = time (date 2024 Jan 2) 0 0 0
+  let transfer = Transfer with
+        sender = alice; receiver = bob; amount = 100.0
+        instrumentId = registry.instrumentId
+        requestedAt = demoTime; executeBefore = nearFuture
+        inputHoldingCids = [h1]; meta = emptyMetadata
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  result <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  case result.output of
+    TransferInstructionResult_Pending instrCid -> do
+      -- Advance time past the deadline
+      setTime (time (date 2024 Jan 3) 0 0 0)
+      -- Bob tries to accept -> must fail (expired)
+      submitMustFail bob $ exerciseCmd instrCid TransferInstruction_Accept with
+        extraArgs = emptyExtraArgs
+    _ -> fail "Expected Pending"
+
+-- Test 22: Preapproval instrumentId mismatch (cross-instrument attack)
+test_preapprovalInstrumentIdMismatch : Script ()
+test_preapprovalInstrumentIdMismatch = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+  -- Create a multi-instrument registry
+  registry2 <- initializeMulti "admin2" ["TokenA", "TokenB"]
+  let instrA = InstrumentId with admin = registry2.admin; id = "TokenA"
+      instrB = InstrumentId with admin = registry2.admin; id = "TokenB"
+  -- Create holding in TokenA
+  hA <- createHoldingForInstrument registry2.admin alice instrA 100.0
+  -- Create preapproval for bob but for TokenB
+  _ <- submitMulti [registry2.admin, bob] [] $ createCmd TransferPreapproval with
+    admin = registry2.admin
+    receiver = bob
+    instrumentId = instrB  -- Different instrument!
+    expiresAt = None
+    meta = emptyMetadata
+  -- Try to transfer TokenA using TokenB preapproval -> should fail at preapproval validation
+  let transfer = Transfer with
+        sender = alice; receiver = bob; amount = 50.0
+        instrumentId = instrA
+        requestedAt = demoTime; executeBefore = futureDeadline
+        inputHoldingCids = [hA]; meta = emptyMetadata
+  -- Manually build context with the wrong preapproval
+  [(rulesCid, _)] <- query @SimpleTokenRules registry2.admin
+  preapprovals <- queryFilter @TransferPreapproval registry2.admin (\p -> p.receiver == bob)
+  case preapprovals of
+    (pCid, _) :: _ -> do
+      let tfCid = toInterfaceContractId @TransferFactory rulesCid
+      rulesDisc <- queryDisc @SimpleTokenRules registry2.admin rulesCid
+      pDisc <- queryDisc @TransferPreapproval registry2.admin pCid
+      let ctx = ChoiceContext with
+            values = TextMap.fromList [(transferPreapprovalContextKey, AV_ContractId (coerceContractId pCid))]
+      submitWithDiscMustFail alice (rulesDisc <> pDisc) $
+        exerciseCmd tfCid TransferFactory_Transfer with
+          expectedAdmin = registry2.admin
+          transfer
+          extraArgs = ExtraArgs with context = ctx; meta = emptyMetadata
+    [] -> fail "Preapproval not found"
+
+-- Test 23: Unexpired locked holding rejected as input
+test_unexpiredLockedHoldingInput : Script ()
+test_unexpiredLockedHoldingInput = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  -- Create a locked holding with future expiry
+  lockedCid <- submitMulti [registry.admin, alice] [] $ createCmd LockedSimpleHolding with
+    admin = registry.admin
+    owner = alice
+    instrumentId = registry.instrumentId
+    amount = 100.0
+    lock = Lock with
+      holders = [registry.admin]
+      expiresAt = Some futureDeadline
+      expiresAfter = None
+      context = Some "test lock"
+    extraObservers = []
+    meta = emptyMetadata
+  let lockedHoldingCid = toInterfaceContractId @Holding lockedCid
+  let transfer = Transfer with
+        sender = alice; receiver = alice; amount = 50.0
+        instrumentId = registry.instrumentId
+        requestedAt = demoTime; executeBefore = futureDeadline
+        inputHoldingCids = [lockedHoldingCid]; meta = emptyMetadata
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  submitWithDiscMustFail alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+
+-- Test 24: Expired locked holding ACCEPTED as input (positive test)
+test_expiredLockedHoldingInput : Script ()
+test_expiredLockedHoldingInput = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  -- Create a locked holding with past expiry
+  let pastTime = time (date 2023 Dec 31) 0 0 0
+  lockedCid <- submitMulti [registry.admin, alice] [] $ createCmd LockedSimpleHolding with
+    admin = registry.admin
+    owner = alice
+    instrumentId = registry.instrumentId
+    amount = 100.0
+    lock = Lock with
+      holders = [registry.admin]
+      expiresAt = Some pastTime  -- Already expired
+      expiresAfter = None
+      context = Some "expired lock"
+    extraObservers = []
+    meta = emptyMetadata
+  let lockedHoldingCid = toInterfaceContractId @Holding lockedCid
+  let transfer = Transfer with
+        sender = alice; receiver = alice; amount = 100.0
+        instrumentId = registry.instrumentId
+        requestedAt = demoTime; executeBefore = futureDeadline
+        inputHoldingCids = [lockedHoldingCid]; meta = emptyMetadata
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  -- This should SUCCEED because the lock is expired
+  result <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  case result.output of
+    TransferInstructionResult_Completed _ -> pure ()
+    _ -> fail "Expected Completed for expired locked holding"
+  checkBalance alice registry.instrumentId 100.0

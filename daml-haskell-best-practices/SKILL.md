@@ -10,6 +10,25 @@ user-invocable: true
 
 Agent-optimized pattern reference. Every section is a discrete pattern with production code.
 
+## Build Tooling: dpm (not daml)
+
+**CRITICAL**: Use `dpm` (Digital Asset Package Manager) for all CLI operations. The `daml` assistant is deprecated and must not be used.
+
+| Task | Command |
+|---|---|
+| Build a package | `dpm build` (run from package directory containing `daml.yaml`) |
+| Run tests | `dpm test` |
+| Clean build artifacts | `dpm clean` |
+| Run sandbox | `dpm sandbox` |
+| Run a Daml script | `dpm script` |
+
+The `dpm` binary is at `~/.dpm/bin/dpm`. It is a drop-in replacement — same subcommands, same flags.
+
+`dpm test` requires Java on PATH. If `java` is not found, set JAVA_HOME:
+```
+JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.10/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" dpm test
+```
+
 ## When to Reference This Skill
 
 - Implementing a new DAML template or choice: Template Structure, Controller Patterns, Signatory table

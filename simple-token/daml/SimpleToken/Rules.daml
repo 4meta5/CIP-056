@@ -1,0 +1,283 @@
+-- | SimpleTokenRules: the factory contract implementing TransferFactory and AllocationFactory.
+-- Supports multiple instruments via supportedInstruments list.
+-- Implements 3-way transfer dispatch: self-transfer, direct (preapproval), two-step (lock+instruction).
+module SimpleToken.Rules where
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1
+import Splice.Api.Token.TransferInstructionV1
+import Splice.Api.Token.AllocationV1
+import Splice.Api.Token.AllocationInstructionV1
+
+import SimpleToken.Holding
+import SimpleToken.Preapproval
+import SimpleToken.TransferInstruction
+import SimpleToken.Allocation
+import SimpleToken.ContextUtils
+
+-- | The factory contract for creating transfers and allocations.
+-- Single instance supports multiple instrument IDs.
+template SimpleTokenRules
+  with
+    admin : Party
+    supportedInstruments : [Text]
+  where
+    signatory admin
+
+    interface instance TransferFactory for SimpleTokenRules where
+      view = TransferFactoryView with
+        admin
+        meta = emptyMetadata
+
+      transferFactory_transferImpl _selfCid arg = do
+        let transfer = arg.transfer
+        -- Invariant #1: expectedAdmin matches admin
+        assertMsg "expectedAdmin does not match factory admin"
+          (arg.expectedAdmin == admin)
+        -- Invariant #6: amount > 0
+        assertMsg "Transfer amount must be positive"
+          (transfer.amount > 0.0)
+        -- Invariant #2: requestedAt <= ledgerTime
+        now <- getTime
+        assertMsg "requestedAt must not be in the future"
+          (transfer.requestedAt <= now)
+        -- Invariant #3: executeBefore > ledgerTime
+        assertMsg "executeBefore must be in the future"
+          (transfer.executeBefore > now)
+        -- Invariant #7: instrumentId.admin == admin
+        assertMsg "instrumentId.admin must match factory admin"
+          (transfer.instrumentId.admin == admin)
+        -- Multi-instrument support (Gap 7): check instrument is supported
+        assertMsg "Instrument not supported by this factory"
+          (transfer.instrumentId.id `elem` supportedInstruments)
+        -- Invariant #8: non-empty inputHoldingCids
+        assertMsg "inputHoldingCids must not be empty"
+          (not $ null transfer.inputHoldingCids)
+
+        -- Invariant #9: archive ALL inputs (first mutation for contention guarantee)
+        -- Also validate each input: owner, instrumentId, lock status (invariants #10, #17, #19, #20)
+        totalInput <- archiveAndSumInputs transfer.sender transfer.instrumentId transfer.inputHoldingCids
+
+        -- Invariant #18: sum(inputs) >= amount (Gap 3)
+        assertMsg ("Insufficient funds: have " <> show totalInput <> " but need " <> show transfer.amount)
+          (totalInput >= transfer.amount)
+
+        -- 3-way dispatch
+        if transfer.sender == transfer.receiver then
+          -- Self-transfer path (merge/defragment)
+          selfTransfer admin transfer totalInput arg.extraArgs.meta
+        else do
+          -- Check for preapproval in context
+          optPreapprovalCid <- lookupFromContextU @(ContractId TransferPreapproval) arg.extraArgs.context transferPreapprovalContextKey
+          case optPreapprovalCid of
+            Some preapprovalCid ->
+              -- Direct transfer path
+              directTransfer admin transfer totalInput preapprovalCid arg.extraArgs.meta
+            None ->
+              -- Two-step transfer path
+              twoStepTransfer admin transfer totalInput
+
+      transferFactory_publicFetchImpl _selfCid arg = do
+        assertMsg "expectedAdmin does not match factory admin"
+          (arg.expectedAdmin == admin)
+        pure TransferFactoryView with admin; meta = emptyMetadata
+
+    interface instance AllocationFactory for SimpleTokenRules where
+      view = AllocationFactoryView with
+        admin
+        meta = emptyMetadata
+
+      allocationFactory_allocateImpl _selfCid arg = do
+        let leg = arg.allocation.transferLeg
+            settlement = arg.allocation.settlement
+        -- Invariant #1: expectedAdmin matches admin
+        assertMsg "expectedAdmin does not match factory admin"
+          (arg.expectedAdmin == admin)
+        -- Invariant #6: amount > 0
+        assertMsg "Allocation amount must be positive"
+          (leg.amount > 0.0)
+        -- Invariant #2: requestedAt <= ledgerTime
+        now <- getTime
+        assertMsg "requestedAt must not be in the future"
+          (arg.requestedAt <= now)
+        -- Invariant #4: allocateBefore > ledgerTime
+        assertMsg "allocateBefore must be in the future"
+          (settlement.allocateBefore > now)
+        -- Invariant #5: allocateBefore <= settleBefore
+        assertMsg "allocateBefore must be <= settleBefore"
+          (settlement.allocateBefore <= settlement.settleBefore)
+        -- Invariant #7: instrumentId.admin == admin
+        assertMsg "instrumentId.admin must match factory admin"
+          (leg.instrumentId.admin == admin)
+        -- Multi-instrument support
+        assertMsg "Instrument not supported by this factory"
+          (leg.instrumentId.id `elem` supportedInstruments)
+        -- Invariant #8: non-empty inputHoldingCids
+        assertMsg "inputHoldingCids must not be empty"
+          (not $ null arg.inputHoldingCids)
+
+        -- Archive all inputs and sum amounts
+        totalInput <- archiveAndSumInputs leg.sender leg.instrumentId arg.inputHoldingCids
+
+        -- Invariant #18: sufficient funds
+        assertMsg ("Insufficient funds: have " <> show totalInput <> " but need " <> show leg.amount)
+          (totalInput >= leg.amount)
+
+        -- Create locked holding for the allocation
+        lockedCid <- create LockedSimpleHolding with
+          admin
+          owner = leg.sender
+          instrumentId = leg.instrumentId
+          amount = leg.amount
+          lock = Lock with
+            holders = [admin]
+            expiresAt = Some settlement.settleBefore
+            expiresAfter = None
+            context = Some "allocation"
+          extraObservers = [settlement.executor, leg.receiver]
+          meta = emptyMetadata
+
+        -- Create the allocation (direct-to-completed)
+        allocationCid <- create SimpleAllocation with
+          admin
+          allocation = arg.allocation
+          lockedHoldingCid = lockedCid
+
+        -- Create sender change if needed
+        senderChangeCids <- if totalInput > leg.amount
+          then do
+            changeCid <- create SimpleHolding with
+              admin
+              owner = leg.sender
+              instrumentId = leg.instrumentId
+              amount = totalInput - leg.amount
+              meta = emptyMetadata
+            pure [toInterfaceContractId @Holding changeCid]
+          else pure []
+
+        pure AllocationInstructionResult with
+          output = AllocationInstructionResult_Completed with
+            allocationCid = toInterfaceContractId @Allocation allocationCid
+          senderChangeCids
+          meta = emptyMetadata
+
+      allocationFactory_publicFetchImpl _selfCid arg = do
+        assertMsg "expectedAdmin does not match factory admin"
+          (arg.expectedAdmin == admin)
+        pure AllocationFactoryView with admin; meta = emptyMetadata
+
+
+-- Internal implementation functions
+-------------------------------------
+
+-- | Archive all input holdings and return their total amount.
+-- Validates per-input: owner, instrumentId, lock status (invariants #10, #17, #19, #20).
+archiveAndSumInputs : Party -> InstrumentId -> [ContractId Holding] -> Update Decimal
+archiveAndSumInputs sender expectedInstrumentId holdingCids = do
+  amounts <- forA holdingCids $ \holdingCid -> do
+    holdingI <- fetch holdingCid
+    let hv = view holdingI
+    -- Invariant #10: input owner == sender
+    assertMsg "Input holding owner does not match sender"
+      (hv.owner == sender)
+    -- Invariant #17: input instrumentId matches transfer instrumentId (Gap 4)
+    assertMsg "Input holding instrumentId does not match transfer"
+      (hv.instrumentId == expectedInstrumentId)
+    -- Invariants #19 and #20: handle locked holdings (Gap 5)
+    case hv.lock of
+      None -> pure () -- unlocked, fine
+      Some lock -> do
+        -- Invariant #20: unexpired locks rejected
+        -- Invariant #19: expired locks accepted
+        now <- getTime
+        let lockExpired = case lock.expiresAt of
+              None -> False
+              Some t -> now >= t
+        assertMsg "Cannot use holding with unexpired lock as transfer input"
+          lockExpired
+    archive holdingCid
+    pure hv.amount
+  pure (sum amounts)
+
+-- | Self-transfer: merge inputs into one holding + optional change.
+selfTransfer : Party -> Transfer -> Decimal -> Metadata -> Update TransferInstructionResult
+selfTransfer admin transfer totalInput meta = do
+  -- Create single merged holding
+  receiverCid <- create SimpleHolding with
+    admin
+    owner = transfer.sender
+    instrumentId = transfer.instrumentId
+    amount = transfer.amount
+    meta
+  -- Change back to sender
+  senderChangeCids <- if totalInput > transfer.amount
+    then do
+      changeCid <- create SimpleHolding with
+        admin
+        owner = transfer.sender
+        instrumentId = transfer.instrumentId
+        amount = totalInput - transfer.amount
+        meta = emptyMetadata
+      pure [toInterfaceContractId @Holding changeCid]
+    else pure []
+  pure TransferInstructionResult with
+    output = TransferInstructionResult_Completed with
+      receiverHoldingCids = [toInterfaceContractId @Holding receiverCid]
+    senderChangeCids
+    meta = emptyMetadata
+
+-- | Direct transfer: preapproval exists, send directly.
+-- The preapproval choice creates the receiver holding (needs receiver auth from preapproval signatories).
+directTransfer : Party -> Transfer -> Decimal -> ContractId TransferPreapproval -> Metadata -> Update TransferInstructionResult
+directTransfer admin transfer totalInput preapprovalCid meta = do
+  -- Exercise nonconsuming send on preapproval (validates instrumentId match - invariant #16)
+  (receiverHoldingCids, senderChangeCids) <- exercise preapprovalCid TransferPreapproval_Send with
+    sender = transfer.sender
+    transferInstrumentId = transfer.instrumentId
+    amount = transfer.amount
+    totalInput
+    holdingMeta = meta
+  pure TransferInstructionResult with
+    output = TransferInstructionResult_Completed with
+      receiverHoldingCids
+    senderChangeCids
+    meta = emptyMetadata
+
+-- | Two-step transfer: create locked holding + transfer instruction.
+twoStepTransfer : Party -> Transfer -> Decimal -> Update TransferInstructionResult
+twoStepTransfer admin transfer totalInput = do
+  -- Create locked holding with receiver as observer (Gap 1: extraObservers)
+  lockedCid <- create LockedSimpleHolding with
+    admin
+    owner = transfer.sender
+    instrumentId = transfer.instrumentId
+    amount = transfer.amount
+    lock = Lock with
+      holders = [admin]
+      expiresAt = Some transfer.executeBefore
+      expiresAfter = None
+      context = Some "pending-transfer"
+    extraObservers = [transfer.receiver]
+    meta = emptyMetadata
+  -- Create transfer instruction
+  instrCid <- create SimpleTransferInstruction with
+    admin
+    transfer
+    lockedHoldingCid = lockedCid
+    originalInstructionCid = None
+  -- Change back to sender
+  senderChangeCids <- if totalInput > transfer.amount
+    then do
+      changeCid <- create SimpleHolding with
+        admin
+        owner = transfer.sender
+        instrumentId = transfer.instrumentId
+        amount = totalInput - transfer.amount
+        meta = emptyMetadata
+      pure [toInterfaceContractId @Holding changeCid]
+    else pure []
+  pure TransferInstructionResult with
+    output = TransferInstructionResult_Pending with
+      transferInstructionCid = toInterfaceContractId @TransferInstruction instrCid
+    senderChangeCids
+    meta = emptyMetadata

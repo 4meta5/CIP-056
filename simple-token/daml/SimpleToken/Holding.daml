@@ -1,0 +1,50 @@
+-- | Holdings for the simple token standard implementation.
+-- SimpleHolding: unlocked holding with flat Decimal amount.
+-- LockedSimpleHolding: locked holding with admin-only lock holder and extraObservers.
+module SimpleToken.Holding where
+
+import Splice.Api.Token.HoldingV1
+import Splice.Api.Token.MetadataV1
+
+-- | A simple, unlocked holding of a token instrument.
+template SimpleHolding
+  with
+    admin : Party
+    owner : Party
+    instrumentId : InstrumentId
+    amount : Decimal
+    meta : Metadata
+  where
+    signatory admin, owner
+
+    interface instance Holding for SimpleHolding where
+      view = HoldingView with
+        owner
+        instrumentId
+        amount
+        lock = None
+        meta
+
+-- | A locked holding. Lock holders must be [admin] only.
+-- The lock has an absolute expiry time.
+-- Extra observers allow the transfer receiver or allocation executor to see this contract.
+template LockedSimpleHolding
+  with
+    admin : Party
+    owner : Party
+    instrumentId : InstrumentId
+    amount : Decimal
+    lock : Lock
+    extraObservers : [Party]
+    meta : Metadata
+  where
+    signatory admin, owner, lock.holders
+    observer extraObservers
+
+    interface instance Holding for LockedSimpleHolding where
+      view = HoldingView with
+        owner
+        instrumentId
+        amount
+        lock = Some lock
+        meta
