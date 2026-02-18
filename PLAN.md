@@ -1,20 +1,18 @@
 # PLAN: CIP-056 Simple Token Implementation
 
-Status: on-ledger implementation complete (27/27 tests passing); off-ledger service not started
+Status: on-ledger implementation complete (27/27 tests passing)
+
+Scope: see [SCOPE.md](SCOPE.md) for authoritative scope boundaries, out-of-scope items, and post-MVP backlog.
 
 ## Goal
 
 Deliver a minimal, secure, readable Canton token-standard implementation in DAML/Haskell that:
 - Implements all 6 CIP-056 interface packages as-is (stable ABI)
 - Is simpler than Splice's Amulet implementation while preserving required behavior and safety conventions
-- Provides an off-ledger registry HTTP service aligned to Splice OpenAPI conventions
 
 ## Non-Goals
 
-- Full Splice registry internals (mining rounds, fee schedules, reward coupons, featured apps)
-- Multi-tenant auth gateway, high-scale ops hardening, custom compliance engines
-- Extension APIs not required for baseline CIP-056 flow (burn/mint, delegation, compliance partitions)
-- Feature parity with `ExternalPartyAmuletRules` nonce/deduplication machinery
+See [SCOPE.md §3](SCOPE.md#3-out-of-scope) for the full out-of-scope list.
 
 ---
 
@@ -419,8 +417,6 @@ canton-network-token-standard/
           Negative.daml                  -- 12 security/negative tests + 1 positive (expired lock)
     daml.yaml                            -- depends on simple-token DAR
 
-  service/                               -- Off-ledger Haskell HTTP service (NOT STARTED)
-    (not implemented)
 ```
 
 > **Deviation from plan:** `Util.daml` became `ContextUtils.daml` — a 137-line module with `ToAnyValue`/`FromAnyValue` typeclasses and `lookupFromContext`/`getFromContext` helpers. This is more complex than the planned "requireExpectedAdminMatch, time validation, holding helpers" utility module, but the typeclasses are necessary for type-safe `ChoiceContext` serialization/deserialization. The pattern is borrowed from Splice's `TokenApiUtils`.
@@ -720,17 +716,6 @@ Sequenced by dependency. No time estimates.
 - Added defragmentation tests (10-holding merge, multi-instrument transfer).
 - Validated: all 27 tests pass via `dpm test`.
 
-### Step 9: Off-Ledger Service — ❌ NOT STARTED
-- Metadata endpoints: not implemented.
-- Transfer-instruction factory + choice-context endpoints: not implemented.
-- Allocation-instruction factory endpoint: not implemented.
-- `ChoiceContext` assembly and `disclosedContracts` bundling: not implemented.
-- `excludeDebugFields` query parameter: not implemented.
-- 409/404 error handling: not implemented.
-
-### Step 10: Integration Tests — ❌ NOT STARTED
-- Depends on Step 9.
-
 ---
 
 ## 12. Risks and Mitigations
@@ -738,7 +723,6 @@ Sequenced by dependency. No time estimates.
 | Risk | Mitigation | Status |
 |---|---|---|
 | Hidden complexity from synchronizer assignment | Document same-synchronizer prerequisite; test on LocalNet early | Open (no LocalNet testing yet) |
-| Disclosure leakage in off-ledger API | Strict disclosure whitelist; `excludeDebugFields` default on | Open (service not started) |
 | UTXO fragmentation degrades UX | Implemented `test_selfTransferMerge10Holdings` proving merge works | ✅ Mitigated |
 | Lock holder authorization complexity | Admin is sole lock holder; simplifies unlock authorization | ✅ Mitigated |
 | Interface DAR version drift | Pinned `splice-api-token-*` 1.0.0 DARs in `dars/` symlinks; track CHANGELOG | ✅ Mitigated |
@@ -795,8 +779,6 @@ Resolved design questions matched to implementation evidence.
 | Add `test_publicFetch` | P2 | Small | Dedicated test for `TransferFactory_PublicFetch` |
 | Implement Gap 10 (`expireLockKey` pattern) | P0 | Medium | Edge case in two-step transfer lifecycle |
 | Implement Gap 6 (`tx-kind` metadata) | P2 | Small | Wallet interop improvement |
-| Off-ledger HTTP service (Step 9) | P1 | Large | Entire service layer not started |
-| Integration tests (Step 10) | P1 | Medium | Depends on off-ledger service |
 
 ## 15. Deferred (Post-MVP)
 
@@ -820,8 +802,8 @@ Known Canton Network constraints relevant to this implementation.
 
 **Same-synchronizer atomicity:** DvP only works when all contracts are on the same synchronizer. Cross-synchronizer transactions require the Global Synchronizer. The plan acknowledges this as risk #1 but doesn't specify which synchronizer topology to target. For institutional use cases (DTCC Treasury tokenization, Tradeweb repos), this is the critical infrastructure question.
 
-**Contract reassignment:** When contracts move between synchronizers, they enter a "reassignment" state where they're temporarily unavailable. The off-ledger service must return 409 Conflict in this case. This is a real operational concern for multi-synchronizer deployments.
+**Contract reassignment:** When contracts move between synchronizers, they enter a "reassignment" state where they're temporarily unavailable. This is a real operational concern for multi-synchronizer deployments.
 
-**Disclosure and privacy:** Canton's privacy model means wallets may not see contracts they need to exercise choices against. The off-ledger service must provide `disclosedContracts` to bridge this gap. Our `extraObservers` field on `LockedSimpleHolding` partially addresses this for on-ledger flows.
+**Disclosure and privacy:** Canton's privacy model means wallets may not see contracts they need to exercise choices against. Our `extraObservers` field on `LockedSimpleHolding` addresses this for on-ledger flows by ensuring receivers and executors can see locked holdings.
 
 **SDK and Canton version pinning:** The ecosystem is evolving rapidly (Polyglot Canton with EVM support announced late 2025, automated fee calculation via oracles proposed). Pinning SDK versions early and tracking the CHANGELOG is essential. Current pin: SDK 3.4.10, LF 2.1.
