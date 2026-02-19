@@ -93,9 +93,7 @@ After completing a security audit (AUDIT0.md) of 3 HIGH + 22 MEDIUM issues acros
 | **Total omitted** | **~4,976** | **0** | | | |
 | **Core token logic** | **~1,756** | **~800** | **Yes** | **Yes** | **Implemented** |
 
-Every omitted feature is Splice-specific infrastructure, not CIP-056 requirements. Our 800 LOC implementation passes 27/27 tests and produces interface views compatible with Splice wallets. The audit found that 15 of 22 MEDIUM-severity Splice bugs are NOT APPLICABLE to our codebase precisely because we don't have these subsystems.
-
-The real risk isn't missing features. It's the 4 hardening items that *are* in scope but not yet applied (see Post-MVP, section 9).
+Every omitted feature is Splice-specific infrastructure, not CIP-056 requirements. Our ~800 LOC implementation passes 36/36 tests and produces interface views compatible with Splice wallets. The audit found that 15 of 22 MEDIUM-severity Splice bugs are NOT APPLICABLE to our codebase precisely because we don't have these subsystems.
 
 ## 3. In Scope
 
@@ -106,7 +104,7 @@ The real risk isn't missing features. It's the 4 hardening items that *are* in s
 - Zero-fee model (flat `Decimal`)
 - Multi-instrument support via `supportedInstruments`
 - 24 security invariants (see PLAN.md section 9)
-- 27 tests: 7 transfer + 5 allocation + 2 defrag + 12 negative + 1 positive
+- 36 tests: 9 transfer + 5 allocation + 2 defrag + 20 security
 - Compatibility with Splice off-ledger APIs (our contracts produce the same interface views and result types the off-ledger service expects)
 
 ## 4. Out of Scope
@@ -156,7 +154,7 @@ Features in CIP-056 not fully implemented by either Splice or this project.
 | 7 | CNS integration | Outside CIP-056 | Outside CIP-056 | Separate standard | Implement when CNS stabilizes |
 | 8 | `expiresAfter` lock behavior | Both use `expiresAt` only | Both use `expiresAt` only | Spec should clarify relationship | Spec clarification needed |
 | 9 | Automatic holding selection | Not implemented | Not implemented | Registry-side input picking | Post-MVP |
-| 10 | `expireLockKey` pattern (withdraw/reject after lock expiry) | Done | GAP | Edge case: locked holding archived before instruction exercised | **P0 TODO** |
+| 10 | `expireLockKey` pattern (withdraw/reject after lock expiry) | Done | ✅ Resolved | Edge case: locked holding archived before instruction exercised | Implemented via `expireLockContextKey` |
 
 ## 7. Architectural Decisions
 
@@ -166,13 +164,13 @@ Resolved decisions from the design review, matched to implementation.
 |---|---|---|---|
 | Expired lock handling | Accept expired, reject unexpired via `archiveAndSumInputs` (invariants #19/#20) | Spec says "Registries SHOULD allow holdings with expired locks as inputs" | Q1 |
 | Consuming vs nonconsuming preapproval | Nonconsuming `TransferPreapproval_Send` | Matches Splice/Standard2; better UX (no recreate after each transfer) | Q2 |
-| Expired fund cleanup | Sender self-serves via `LockedSimpleHolding_Unlock` (TODO) or uses expired lock as factory input | No automation needed; expired locks accepted as inputs | Q3 |
+| Expired fund cleanup | Sender self-serves via `LockedSimpleHolding_Unlock` choice or uses expired lock as factory input; expire-lock context pattern for reject/withdraw | No automation needed; expired locks accepted as inputs | Q3 |
 | Per-input `instrumentId` | Per-input check in `archiveAndSumInputs` (invariant #17) | Defense-in-depth against cross-instrument attacks | Q4 |
 | Multi-instrument support | One factory, multiple instruments via `supportedInstruments` list | Fewer on-ledger contracts for multi-token registries | Q5 |
 | Off-ledger auth | Out of scope for on-ledger contracts | CIP-056 permits unauthenticated baseline | Q6 |
 | Contention retries | Client-side | Standard Canton UTXO behavior; service stays stateless | Q7 |
 | DvP testing | `submitMulti` in Daml Script (`test_dvpTwoLegs`) | Proves authorization model; atomicity guaranteed by Canton | Q8 |
-| Metadata DNS prefix | `emptyMetadata` for MVP | Placeholder until project domain chosen; no premature commitment | Q9 |
+| Metadata DNS prefix | `splice.lfdecentralizedtrust.org/tx-kind` on all results | Splice convention for wallet interop | Q9 |
 | `TransferInstruction_Update` | `fail` stub | Simple registry has no internal workflow; honest failure message | Q10 |
 | Registry pause | Archive factory | Zero-code, effective; re-create factory to resume | Q11 |
 

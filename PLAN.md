@@ -1,6 +1,6 @@
 # PLAN: CIP-056 Simple Token Implementation
 
-Status: on-ledger implementation complete (27/27 tests passing)
+Status: on-ledger implementation complete (36/36 tests passing)
 
 Scope: see [SCOPE.md](SCOPE.md) for authoritative scope boundaries, out-of-scope items, and post-MVP backlog.
 
@@ -174,7 +174,7 @@ template SimpleHolding
 - No choices on the template itself; holdings are consumed by factory logic.
 - `admin` is the registry operator (equivalent to Splice's `dso`).
 
-> **Deviation from plan:** Missing `ensure amount > 0.0`. The invariant is enforced at the factory level (invariant #6 in `simpleTransferImpl` and `simpleAllocateImpl` both check `amount > 0.0` before creating holdings), so no holding with non-positive amount can be created through normal flows. Adding the `ensure` clause would be defense-in-depth against direct `create` calls. **Status: TODO.**
+> `ensure amount > 0.0` enforced on the template as defense-in-depth (post-MVP hardening). Also enforced at the factory level (invariant #6).
 
 ### 2.2 `LockedSimpleHolding` (locked holding)
 
@@ -208,9 +208,9 @@ template LockedSimpleHolding
 
 > **Gap 1 resolved:** Added `extraObservers : [Party]` field with `observer extraObservers`. Set to `[transfer.receiver]` during two-step transfers and `[settlement.executor, leg.receiver]` during allocations. This is a correctness requirement — without it, receivers/executors cannot see the locked holding.
 >
-> **Deviation from plan:** Missing `ensure amount > 0.0` (same rationale as SimpleHolding — enforced at factory level). **Status: TODO.**
+> `ensure amount > 0.0` enforced on the template as defense-in-depth (post-MVP hardening). Also enforced at the factory level (invariant #6).
 >
-> **Deviation from plan:** Missing `LockedSimpleHolding_Unlock` choice. The plan specified a choice requiring `controller owner :: lock.holders` authorization. In the current implementation, unlocking is handled directly by the `SimpleTransferInstruction` and `SimpleAllocation` choice bodies which archive the locked holding and create a new `SimpleHolding` (they have the necessary signatory authority as `admin` is both lock holder and template signatory). A standalone `Unlock` choice would be useful for manual lock release outside of transfer/allocation flows. **Status: TODO.**
+> `LockedSimpleHolding_Unlock` choice implemented (post-MVP hardening): owner can unlock holdings with expired locks. Unexpired locks cannot be unlocked (admin authority required). Transfer/allocation instruction choices handle the expire-lock context pattern for cases where the owner has already unlocked.
 
 ### 2.3 `SimpleTokenRules` (transfer factory + allocation factory)
 
@@ -403,7 +403,7 @@ canton-network-token-standard/
         Preapproval.daml                 -- TransferPreapproval (nonconsuming)
     daml.yaml                            -- SDK 3.4.10, target 2.1, depends on 6 splice DARs
 
-  simple-token-test/                     -- Test DAR (IMPLEMENTED, 27/27 passing)
+  simple-token-test/                     -- Test DAR (IMPLEMENTED, 36/36 passing)
     daml/
       SimpleToken/
         Testing/
@@ -609,7 +609,7 @@ The CIP-056 spec mandates: "If [inputHoldingCids are] specified, then the transf
 
 > **Status: 24 invariants implemented (plan originally had 15).** Invariants #16-#20 came from the gap analysis. Invariants #21-#24 are defensive deadline checks added during implementation.
 >
-> **Still missing:** `ensure amount > 0.0` on holding templates (defense-in-depth, not reachable through factory flows). **Status: TODO.**
+> All 24 invariants implemented. `ensure amount > 0.0` on holding templates added as defense-in-depth (post-MVP hardening).
 
 ---
 
@@ -676,7 +676,7 @@ The CIP-056 spec mandates: "If [inputHoldingCids are] specified, then the transf
 | 7 | PublicFetch: returns correct factory view with admin | `test_publicFetch` | ✅ (hardening) |
 | 33 | Transfer results include tx-kind metadata | `test_txKindMetadata` | ✅ (hardening) |
 
-> **37/37 tests passing.** The plan originally specified 21 tests. Implementation added 6 tests beyond plan (1b, 22-26) for better coverage of edge cases and gap analysis. Post-MVP hardening added 10 more tests (25-33) covering ensure clauses, unlock choice, expire-lock pattern, PublicFetch, and tx-kind metadata.
+> **36/36 tests passing.** The plan originally specified 21 tests. Implementation added 6 tests beyond plan (1b, 22-26) for better coverage of edge cases and gap analysis. Post-MVP hardening added 9 more tests covering ensure clauses, unlock choice, expire-lock pattern, PublicFetch, and tx-kind metadata.
 
 ---
 
@@ -723,7 +723,8 @@ Sequenced by dependency. No time estimates.
 ### Step 8: Security / Negative Tests — ✅ COMPLETE
 - Wrote 12 negative test cases (criteria 13-24, exceeding plan's 13-21).
 - Added defragmentation tests (10-holding merge, multi-instrument transfer).
-- Validated: all 27 tests pass via `dpm test`.
+- Post-MVP hardening added 10 more tests (amount invariants, unlock choice, expire-lock pattern, PublicFetch, tx-kind metadata).
+- Validated: all 36 tests pass via `dpm test`.
 
 ---
 
@@ -735,7 +736,7 @@ Sequenced by dependency. No time estimates.
 | UTXO fragmentation degrades UX | Implemented `test_selfTransferMerge10Holdings` proving merge works | ✅ Mitigated |
 | Lock holder authorization complexity | Admin is sole lock holder; simplifies unlock authorization | ✅ Mitigated |
 | Interface DAR version drift | Pinned `splice-api-token-*` 1.0.0 DARs in `dars/` symlinks; track CHANGELOG | ✅ Mitigated |
-| Missing `Unlock` choice prevents manual lock release | Users cannot unlock holdings outside transfer/allocation flows | Open (see §14 TODO) |
+| Missing `Unlock` choice prevents manual lock release | `LockedSimpleHolding_Unlock` implemented for expired locks | ✅ Resolved |
 | Gap 10 edge case: archived locked holding | Instruction choices fail if locked holding already archived | Open (see §13 Gap 10) |
 
 ---

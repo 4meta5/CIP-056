@@ -6,7 +6,7 @@ Minimal DAML/Haskell implementation of the 6 CIP-056 on-ledger interfaces. Prove
 
 ## Status
 
-On-ledger: **27/27 tests passing** (7 templates, 6 interfaces, 24 security invariants). Off-ledger: not in scope (uses Splice `token-standard`).
+On-ledger: **36/36 tests passing** (7 templates, 6 interfaces, 24 security invariants). Off-ledger: not in scope (uses Splice `token-standard`). All post-MVP hardening items resolved (see [SCOPE.md §9](SCOPE.md#9-post-mvp)).
 
 ## Prerequisites
 
@@ -30,19 +30,18 @@ JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.10/libexec/openjdk.jdk/Contents/H
   PATH="$JAVA_HOME/bin:$PATH" dpm test
 ```
 
-### What the 27 Tests Prove
+### What the 36 Tests Prove
 
-- **7 transfer lifecycle tests** — self-transfer, direct (preapproval), two-step (pending/accept/reject/withdraw), exact-amount edge case
+- **9 transfer lifecycle tests** — self-transfer, direct (preapproval), two-step (pending/accept/reject/withdraw), exact-amount, PublicFetch, tx-kind metadata
 - **5 allocation/DvP tests** — allocate, execute, cancel, withdraw, multi-leg atomic settlement
 - **2 defragmentation tests** — 10-holding merge, multi-instrument transfer
-- **12 security tests** — admin validation, time windows, contention, authorization, cross-instrument attack, unexpired lock rejection
-- **1 positive expired-lock test** — expired locks accepted as transfer inputs
+- **20 security tests** — admin validation, time windows, contention, authorization, cross-instrument attack, unexpired lock rejection, amount invariants (ensure > 0), owner unlock/lock expiry, expire-lock pattern (reject/withdraw after unlock), expired lock acceptance
 
 ## Project Structure
 
 ```
 simple-token/          Production DAML contracts (7 templates, 6 interface implementations)
-simple-token-test/     Test suite (27 tests across 5 modules)
+simple-token-test/     Test suite (36 tests across 4 modules)
 dars/                  Symlinks to splice-api-token-*-v1 interface DARs
 ```
 
@@ -50,14 +49,6 @@ dars/                  Symlinks to splice-api-token-*-v1 interface DARs
 
 - [SCOPE.md](SCOPE.md) — What's in scope, what's not, differences from Splice, spec gap analysis
 - [PLAN.md](PLAN.md) — Implementation plan, template designs, security invariants, test criteria
-
-## Known Gaps
-
-- `expireLockKey` pattern for post-expiry withdraw/reject edge case (P0)
-- `ensure amount > 0.0` on holding templates (P1)
-- `LockedSimpleHolding_Unlock` choice for manual lock release (P1)
-- `test_publicFetch` dedicated test (P2)
-- `tx-kind` metadata annotations (P2)
 
 ## License
 
