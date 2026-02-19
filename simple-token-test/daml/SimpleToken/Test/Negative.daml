@@ -1,4 +1,4 @@
--- | Security and negative tests (12 tests).
+-- | Security and negative tests (20 tests).
 module SimpleToken.Test.Negative where
 
 import DA.Date
@@ -304,3 +304,189 @@ test_expiredLockedHoldingInput = do
     TransferInstructionResult_Completed _ -> pure ()
     _ -> fail "Expected Completed for expired locked holding"
   checkBalance alice registry.instrumentId 100.0
+
+-- Test 25: Zero-amount SimpleHolding cannot be created (defense-in-depth)
+test_zeroAmountHolding : Script ()
+test_zeroAmountHolding = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  -- Direct create with amount = 0.0 must fail
+  submitMultiMustFail [registry.admin, alice] [] $ createCmd SimpleHolding with
+    admin = registry.admin
+    owner = alice
+    instrumentId = registry.instrumentId
+    amount = 0.0
+    meta = emptyMetadata
+
+-- Test 26: Negative-amount SimpleHolding cannot be created
+test_negativeAmountHolding : Script ()
+test_negativeAmountHolding = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  submitMultiMustFail [registry.admin, alice] [] $ createCmd SimpleHolding with
+    admin = registry.admin
+    owner = alice
+    instrumentId = registry.instrumentId
+    amount = -10.0
+    meta = emptyMetadata
+
+-- Test 27: Zero-amount LockedSimpleHolding cannot be created
+test_zeroAmountLockedHolding : Script ()
+test_zeroAmountLockedHolding = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  submitMultiMustFail [registry.admin, alice] [] $ createCmd LockedSimpleHolding with
+    admin = registry.admin
+    owner = alice
+    instrumentId = registry.instrumentId
+    amount = 0.0
+    lock = Lock with
+      holders = [registry.admin]
+      expiresAt = Some futureDeadline
+      expiresAfter = None
+      context = Some "test"
+    extraObservers = []
+    meta = emptyMetadata
+
+-- Test 28: TransferPreapproval_Send rejects zero amount (defense-in-depth)
+test_preapprovalZeroAmount : Script ()
+test_preapprovalZeroAmount = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+  -- Create preapproval for bob
+  preapprovalCid <- createPreapproval registry bob None
+  -- Exercise the choice directly with amount = 0.0 (bypassing factory validation)
+  submitMultiMustFail [registry.admin, alice] [] $
+    exerciseCmd preapprovalCid TransferPreapproval_Send with
+      sender = alice
+      transferInstrumentId = registry.instrumentId
+      amount = 0.0
+      totalInput = 100.0
+      holdingMeta = emptyMetadata
+
+-- NOTE: Contract keys on SimpleTokenRules and TransferPreapproval (AUDIT0 #30-31)
+-- are NOT implementable on Daml LF 2.1 (Canton 3.x dropped contract key support).
+-- Singleton semantics must be enforced at the application/off-ledger level.
+
+-- Test 29: Owner can unlock an expired locked holding
+test_ownerUnlockExpiredLock : Script ()
+test_ownerUnlockExpiredLock = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  -- Create a locked holding with a near-future expiry
+  let nearFuture = time (date 2024 Jan 2) 0 0 0
+  lockedCid <- submitMulti [registry.admin, alice] [] $ createCmd LockedSimpleHolding with
+    admin = registry.admin
+    owner = alice
+    instrumentId = registry.instrumentId
+    amount = 100.0
+    lock = Lock with
+      holders = [registry.admin]
+      expiresAt = Some nearFuture
+      expiresAfter = None
+      context = Some "test lock"
+    extraObservers = []
+    meta = emptyMetadata
+  -- Advance time past lock expiry
+  setTime (time (date 2024 Jan 3) 0 0 0)
+  -- Owner unlocks -> should succeed, returning an unlocked SimpleHolding
+  _ <- submit alice $ exerciseCmd lockedCid LockedSimpleHolding_Unlock
+  checkBalance alice registry.instrumentId 100.0
+
+-- Test 30: Owner cannot unlock an unexpired locked holding
+test_ownerUnlockUnexpiredLock : Script ()
+test_ownerUnlockUnexpiredLock = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  lockedCid <- submitMulti [registry.admin, alice] [] $ createCmd LockedSimpleHolding with
+    admin = registry.admin
+    owner = alice
+    instrumentId = registry.instrumentId
+    amount = 100.0
+    lock = Lock with
+      holders = [registry.admin]
+      expiresAt = Some futureDeadline
+      expiresAfter = None
+      context = Some "test lock"
+    extraObservers = []
+    meta = emptyMetadata
+  -- Try to unlock while lock is still active -> must fail
+  submitMustFail alice $ exerciseCmd lockedCid LockedSimpleHolding_Unlock
+
+-- Test 31: Reject succeeds after owner unlocks expired locked holding (expireLockKey)
+test_rejectAfterOwnerUnlock : Script ()
+test_rejectAfterOwnerUnlock = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+  [h1] <- fundParty registry alice 100.0
+  -- Create two-step transfer with near-future deadline
+  let nearFuture = time (date 2024 Jan 2) 0 0 0
+  let transfer = Transfer with
+        sender = alice; receiver = bob; amount = 100.0
+        instrumentId = registry.instrumentId
+        requestedAt = demoTime; executeBefore = nearFuture
+        inputHoldingCids = [h1]; meta = emptyMetadata
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  result <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  case result.output of
+    TransferInstructionResult_Pending instrCid -> do
+      -- Advance time past deadline (lock expires at executeBefore)
+      setTime (time (date 2024 Jan 3) 0 0 0)
+      -- Alice unlocks the expired locked holding
+      [(lockedCid, _)] <- queryFilter @LockedSimpleHolding registry.admin
+        (\h -> h.owner == alice)
+      _ <- submit alice $ exerciseCmd lockedCid LockedSimpleHolding_Unlock
+      -- Alice has 100.0 back from unlock
+      checkBalance alice registry.instrumentId 100.0
+      -- Bob rejects with expire-lock = False (locked holding already archived)
+      let abortArgs = ExtraArgs with
+            context = ChoiceContext with
+              values = TextMap.fromList [(expireLockContextKey, AV_Bool False)]
+            meta = emptyMetadata
+      rejectResult <- submit bob $ exerciseCmd instrCid TransferInstruction_Reject with
+        extraArgs = abortArgs
+      case rejectResult.output of
+        TransferInstructionResult_Failed -> pure ()
+        _ -> fail "Expected Failed"
+      -- No double-return: alice still has exactly 100.0
+      checkBalance alice registry.instrumentId 100.0
+    _ -> fail "Expected Pending"
+
+-- Test 32: Withdraw succeeds after owner unlocks expired locked holding
+test_withdrawAfterOwnerUnlock : Script ()
+test_withdrawAfterOwnerUnlock = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+  [h1] <- fundParty registry alice 100.0
+  let nearFuture = time (date 2024 Jan 2) 0 0 0
+  let transfer = Transfer with
+        sender = alice; receiver = bob; amount = 100.0
+        instrumentId = registry.instrumentId
+        requestedAt = demoTime; executeBefore = nearFuture
+        inputHoldingCids = [h1]; meta = emptyMetadata
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  result <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  case result.output of
+    TransferInstructionResult_Pending instrCid -> do
+      setTime (time (date 2024 Jan 3) 0 0 0)
+      [(lockedCid, _)] <- queryFilter @LockedSimpleHolding registry.admin
+        (\h -> h.owner == alice)
+      _ <- submit alice $ exerciseCmd lockedCid LockedSimpleHolding_Unlock
+      checkBalance alice registry.instrumentId 100.0
+      -- Alice withdraws with expire-lock = False
+      let abortArgs = ExtraArgs with
+            context = ChoiceContext with
+              values = TextMap.fromList [(expireLockContextKey, AV_Bool False)]
+            meta = emptyMetadata
+      withdrawResult <- submit alice $ exerciseCmd instrCid TransferInstruction_Withdraw with
+        extraArgs = abortArgs
+      case withdrawResult.output of
+        TransferInstructionResult_Failed -> pure ()
+        _ -> fail "Expected Failed"
+      checkBalance alice registry.instrumentId 100.0
+    _ -> fail "Expected Pending"

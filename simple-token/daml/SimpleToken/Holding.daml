@@ -16,6 +16,7 @@ template SimpleHolding
     meta : Metadata
   where
     signatory admin, owner
+    ensure amount > 0.0
 
     interface instance Holding for SimpleHolding where
       view = HoldingView with
@@ -40,6 +41,17 @@ template LockedSimpleHolding
   where
     signatory admin, owner, lock.holders
     observer extraObservers
+    ensure amount > 0.0
+
+    -- | Owner can unlock a holding whose lock has expired.
+    choice LockedSimpleHolding_Unlock : ContractId SimpleHolding
+      controller owner
+      do
+        now <- getTime
+        case lock.expiresAt of
+          None -> fail "Lock has no expiry and cannot be owner-expired"
+          Some t -> assertMsg "Lock has not yet expired" (now >= t)
+        create SimpleHolding with admin; owner; instrumentId; amount; meta
 
     interface instance Holding for LockedSimpleHolding where
       view = HoldingView with

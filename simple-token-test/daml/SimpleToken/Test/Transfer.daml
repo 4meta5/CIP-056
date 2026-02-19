@@ -1,14 +1,17 @@
--- | Transfer lifecycle tests (7 tests).
+-- | Transfer lifecycle tests (9 tests).
 module SimpleToken.Test.Transfer where
 
 import DA.Date
 import DA.Time
 import DA.Optional (fromSome)
+import DA.TextMap qualified as TextMap
 
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.HoldingV1
 import Splice.Api.Token.TransferInstructionV1
+import Splice.Api.Token.AllocationInstructionV1
 
+import SimpleToken.Rules (SimpleTokenRules)
 import SimpleToken.Testing.SimpleRegistry
 import SimpleToken.Testing.WalletClient
 import SimpleToken.Test.Setup
@@ -178,3 +181,49 @@ test_twoStepTransferWithdraw = do
       -- Alice gets funds back
       checkBalance alice registry.instrumentId 100.0
     _ -> fail "Expected Pending"
+
+-- Test 8: PublicFetch returns correct factory views (using disclosures for visibility)
+test_publicFetch : Script ()
+test_publicFetch = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  -- Query the factory contract as admin (owner), then disclose to alice
+  [(rulesCid, _)] <- query @SimpleTokenRules registry.admin
+  rulesDisc <- queryDisc @SimpleTokenRules registry.admin rulesCid
+  -- TransferFactory_PublicFetch
+  let tfCid = toInterfaceContractId @TransferFactory rulesCid
+  tfView <- submitWithDisc alice rulesDisc $
+    exerciseCmd tfCid TransferFactory_PublicFetch with
+      expectedAdmin = registry.admin
+      actor = alice
+  assert (tfView.admin == registry.admin)
+  -- AllocationFactory_PublicFetch
+  let afCid = toInterfaceContractId @AllocationFactory rulesCid
+  afView <- submitWithDisc alice rulesDisc $
+    exerciseCmd afCid AllocationFactory_PublicFetch with
+      expectedAdmin = registry.admin
+      actor = alice
+  assert (afView.admin == registry.admin)
+
+-- Test 9: Transfer results include tx-kind metadata
+test_txKindMetadata : Script ()
+test_txKindMetadata = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+      txKindKey = "splice.lfdecentralizedtrust.org/tx-kind"
+  -- Self-transfer: should be "merge-split"
+  [h1] <- fundParty registry alice 100.0
+  let selfTransfer = mkTransfer registry alice alice 100.0 [h1]
+  enriched <- getTransferFactory registry selfTransfer emptyExtraArgs
+  selfResult <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  assert (TextMap.lookup txKindKey selfResult.meta.values == Some "merge-split")
+  -- Direct transfer: should be "transfer"
+  [h2] <- fundParty registry alice 100.0
+  _ <- createPreapproval registry bob None
+  let directTransfer = mkTransfer registry alice bob 50.0 [h2]
+  enriched2 <- getTransferFactory registry directTransfer emptyExtraArgs
+  directResult <- submitWithDisc alice enriched2.disclosures $
+    exerciseCmd enriched2.factoryCid enriched2.arg
+  assert (TextMap.lookup txKindKey directResult.meta.values == Some "transfer")

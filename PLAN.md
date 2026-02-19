@@ -644,7 +644,7 @@ The CIP-056 spec mandates: "If [inputHoldingCids are] specified, then the transf
 | 25 | Self-transfer merge 10 fragmented holdings into 1 | `test_selfTransferMerge10Holdings` | ✅ (added) |
 | 26 | Multi-instrument transfer: USD and EUR from same factory | `test_multiInstrumentTransfer` | ✅ (added) |
 
-### Security / Negative Tests (12 tests — `Test/Negative.daml`)
+### Security / Negative Tests (20 tests — `Test/Negative.daml`)
 
 | # | Criterion | Test Function | Status |
 |---|---|---|---|
@@ -660,14 +660,23 @@ The CIP-056 spec mandates: "If [inputHoldingCids are] specified, then the transf
 | 22 | Preapproval instrumentId mismatch (cross-instrument attack) | `test_preapprovalInstrumentIdMismatch` | ✅ (added) |
 | 23 | Unexpired locked holding rejected as input | `test_unexpiredLockedHoldingInput` | ✅ (added) |
 | 24 | Expired locked holding accepted as input (positive) | `test_expiredLockedHoldingInput` | ✅ (added) |
+| 25 | Zero-amount `SimpleHolding` cannot be created | `test_zeroAmountHolding` | ✅ (hardening) |
+| 26 | Negative-amount `SimpleHolding` cannot be created | `test_negativeAmountHolding` | ✅ (hardening) |
+| 27 | Zero-amount `LockedSimpleHolding` cannot be created | `test_zeroAmountLockedHolding` | ✅ (hardening) |
+| 28 | Preapproval rejects zero amount (defense-in-depth) | `test_preapprovalZeroAmount` | ✅ (hardening) |
+| 29 | Owner can unlock expired locked holding | `test_ownerUnlockExpiredLock` | ✅ (hardening) |
+| 30 | Owner cannot unlock unexpired locked holding | `test_ownerUnlockUnexpiredLock` | ✅ (hardening) |
+| 31 | Reject succeeds after owner unlocks expired holding | `test_rejectAfterOwnerUnlock` | ✅ (hardening) |
+| 32 | Withdraw succeeds after owner unlocks expired holding | `test_withdrawAfterOwnerUnlock` | ✅ (hardening) |
 
-### Not Implemented
+### Transfer Lifecycle Tests (9 tests — `Test/Transfer.daml`)
 
 | # | Criterion | Test Function | Status |
 |---|---|---|---|
-| 7 | PublicFetch: returns correct factory view with admin | `test_publicFetch` | ❌ TODO |
+| 7 | PublicFetch: returns correct factory view with admin | `test_publicFetch` | ✅ (hardening) |
+| 33 | Transfer results include tx-kind metadata | `test_txKindMetadata` | ✅ (hardening) |
 
-> **27/27 tests passing.** The plan originally specified 21 tests. Implementation added 6 tests beyond plan (1b, 22-26) for better coverage of edge cases and gap analysis scenarios. `test_publicFetch` (#7) was not implemented — the `PublicFetch` interface method works (exercised via `allocationFactory_publicFetchImpl` in the allocation factory path) but has no dedicated test.
+> **37/37 tests passing.** The plan originally specified 21 tests. Implementation added 6 tests beyond plan (1b, 22-26) for better coverage of edge cases and gap analysis. Post-MVP hardening added 10 more tests (25-33) covering ensure clauses, unlock choice, expire-lock pattern, PublicFetch, and tx-kind metadata.
 
 ---
 
@@ -680,11 +689,11 @@ Sequenced by dependency. No time estimates.
 - Created `simple-token-test/daml.yaml` with dependency on `simple-token` DAR.
 - Validated: `dpm build` succeeds for both packages.
 
-### Step 2: Holding Templates — ✅ COMPLETE (with caveats)
+### Step 2: Holding Templates — ✅ COMPLETE
 - Implemented `SimpleHolding` and `LockedSimpleHolding` with `Holding` interface instances.
 - Implemented `ContextUtils.daml` (replaces planned `Util.daml`) with `ToAnyValue`/`FromAnyValue` typeclasses and context lookup helpers.
-- **Caveat:** `LockedSimpleHolding_Unlock` choice not implemented (see §2.2).
-- **Caveat:** `ensure amount > 0.0` not added to holding templates (see §2.1, §2.2).
+- `ensure amount > 0.0` on both holding templates (post-MVP hardening).
+- `LockedSimpleHolding_Unlock` choice: owner can unlock expired locks (post-MVP hardening).
 
 ### Step 3: Transfer Factory (self-transfer path) — ✅ COMPLETE
 - Implemented `SimpleTokenRules` with `TransferFactory` and `AllocationFactory` interface instances.
@@ -740,15 +749,13 @@ Sequenced by dependency. No time estimates.
 | 3 | Explicit `sum(inputs) >= amount` check | P1 | ✅ Resolved | `Rules.daml` — `assertMsg "Insufficient funds"` after `archiveAndSumInputs` |
 | 4 | Per-input `instrumentId` validation | P1 | ✅ Resolved | `Rules.daml:archiveAndSumInputs` — `hv.instrumentId == expectedInstrumentId` per input |
 | 5 | Expired lock handling for transfer inputs | P1 | ✅ Resolved | `Rules.daml:archiveAndSumInputs` — expired locks accepted (#19), unexpired rejected (#20) |
-| 6 | `tx-kind` metadata annotations | P2 | ❌ Not implemented | Transfer results return `emptyMetadata`. Would need DNS-prefixed metadata keys. |
+| 6 | `tx-kind` metadata annotations | P2 | ✅ Resolved | `ContextUtils.daml` — `txKindMetaKey` + `txKindMeta` helper. All result metadata annotated: `"transfer"` for transfers/allocations, `"merge-split"` for self-transfers. |
 | 7 | Multi-instrument factory support | P2 | ✅ Resolved | `Rules.daml` — `supportedInstruments : [Text]` field, validated on every factory call |
 | 8 | Deadline checks before input archival | P0 | ✅ Resolved | `TransferInstruction.daml`, `Allocation.daml` — deadline checks are first operation in choice bodies |
 | 9 | `archiveAndSumInputs` helper pattern | P1 | ✅ Resolved | `Rules.daml` — single helper shared by transfer and allocation paths |
-| 10 | `expireLockKey` pattern for withdraw/reject after lock expiry | P0 | ❌ Not implemented | Edge case where locked holding is archived before instruction is exercised. Needs Splice's context pattern. |
+| 10 | `expireLockKey` pattern for withdraw/reject after lock expiry | P0 | ✅ Resolved | `TransferInstruction.daml`, `Allocation.daml` — `expireLockContextKey` context pattern. Off-ledger service passes `"expire-lock" = False` when locked holding already archived by owner. |
 
-**Summary:** 8 of 10 gaps resolved. The 2 unresolved gaps are:
-- **Gap 6 (tx-kind metadata):** Low priority (P2). Pure UX/wallet interop improvement with no correctness impact. Can be added by setting `meta = Metadata with values = fromList [("tx-kind", "transfer")]` on result metadata.
-- **Gap 10 (expireLockKey):** High priority (P0). Affects the edge case where a sender self-unlocks an expired locked holding after `executeBefore` passes, causing the `SimpleTransferInstruction` to reference a non-existent contract. Accept/Reject/Withdraw would fail with "contract not found." Needs investigation into Splice's `expireLockKey` context pattern or an alternative approach (e.g., instruction choice bodies handle the case where the locked holding is already archived).
+**Summary:** 10 of 10 gaps resolved.
 
 ---
 
@@ -760,25 +767,29 @@ Resolved design questions matched to implementation evidence.
 |---|---|---|---|
 | Q1 | Expired lock handling | Accept expired, reject unexpired | `Rules.daml:archiveAndSumInputs`, invariants #19/#20 |
 | Q2 | Consuming vs nonconsuming preapproval | Nonconsuming | `Preapproval.daml:TransferPreapproval_Send` |
-| Q3 | Expired fund cleanup | Sender self-serve unlock | `LockedSimpleHolding_Unlock` TODO; expired locks accepted as factory inputs |
+| Q3 | Expired fund cleanup | Sender self-serve unlock | `LockedSimpleHolding_Unlock` choice + expire-lock context pattern; expired locks accepted as factory inputs |
 | Q4 | Per-input instrumentId | Per-input check | `Rules.daml:archiveAndSumInputs`, invariant #17 |
 | Q5 | Multi-instrument | `supportedInstruments` list | `Rules.daml:SimpleTokenRules.supportedInstruments` |
 | Q6 | Off-ledger auth | Out of scope | On-ledger contracts only |
 | Q7 | Contention retries | Client-side | Standard Canton behavior |
 | Q8 | DvP testing | `submitMulti` | `Test/Allocation.daml:test_dvpTwoLegs` |
-| Q9 | Metadata DNS prefix | `emptyMetadata` for MVP | All result metadata uses `emptyMetadata` |
+| Q9 | Metadata DNS prefix | Splice convention | All result metadata uses `splice.lfdecentralizedtrust.org/tx-kind` for wallet interop |
 | Q10 | Update choice | `fail` stub | `TransferInstruction.daml` — `fail "not supported"` |
 | Q11 | Registry pause | Archive factory | No config contract needed |
 
 ## 14. Remaining TODO Items
 
-| Item | Priority | Effort | Notes |
+All post-MVP hardening items (SCOPE.md §9, items 1-7) are now resolved:
+
+| Item | Priority | Status | Notes |
 |---|---|---|---|
-| Add `ensure amount > 0.0` to `SimpleHolding` and `LockedSimpleHolding` | P1 | Small | Defense-in-depth; currently enforced at factory level |
-| Add `LockedSimpleHolding_Unlock` choice | P1 | Small | Manual unlock outside transfer/allocation flows |
-| Add `test_publicFetch` | P2 | Small | Dedicated test for `TransferFactory_PublicFetch` |
-| Implement Gap 10 (`expireLockKey` pattern) | P0 | Medium | Edge case in two-step transfer lifecycle |
-| Implement Gap 6 (`tx-kind` metadata) | P2 | Small | Wallet interop improvement |
+| `expireLockKey` pattern | P0 | ✅ Done | `TransferInstruction.daml`, `Allocation.daml` — expire-lock context branching |
+| `ensure amount > 0.0` on holdings | P0 | ✅ Done | `Holding.daml` — ensure clauses on both templates |
+| `amount > 0.0` in `TransferPreapproval_Send` | P0 | ✅ Done | `Preapproval.daml` — defense-in-depth assertMsg |
+| Contract keys | P0 | ❌ Not implementable | Daml LF 2.1 dropped contract key support; enforce at application level |
+| `LockedSimpleHolding_Unlock` choice | P1 | ✅ Done | `Holding.daml` — owner unlocks expired locks |
+| `test_publicFetch` | P1 | ✅ Done | `Test/Transfer.daml` — exercises both factory PublicFetch choices |
+| `tx-kind` metadata annotations | P1 | ✅ Done | `ContextUtils.daml` — `txKindMeta` helper; all result metadata annotated |
 
 ## 15. Deferred (Post-MVP)
 

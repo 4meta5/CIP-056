@@ -137,7 +137,7 @@ Items not covered by the omitted feature analysis (section 2).
 | 6 | Transfer creation | Via `PaymentTransferContext` | Direct `create` | No fee engine indirection | Compliant |
 | 7 | Fetch validation | `HasCheckedFetch` with `ForDso`/`ForOwner` | `assertMsg` | No group-id machinery | Compliant (validation method is internal) |
 | 8 | Burn metadata | `copyOnlyBurnMeta` propagation | `emptyMetadata` | No burns to propagate | Compliant (metadata is registry-specific) |
-| 9 | `tx-kind` annotations | `splice.lfdecentralizedtrust.org/tx-kind` | Not implemented | GAP (P2) | Partial (improves wallet interop) |
+| 9 | `tx-kind` annotations | `splice.lfdecentralizedtrust.org/tx-kind` | `txKindMeta` on all results | Same DNS-prefixed key | Compliant (wallet interop) |
 | 10 | Submission window | ~10min (limited by `OpenMiningRound`) | Full 24h | No round dependency | Compliant (closer to spec intent) |
 | 11 | Factory-to-instrument | One factory per instrument | One factory, multiple instruments via `supportedInstruments` | Fewer on-ledger contracts | Compliant (factory structure is internal) |
 
@@ -198,15 +198,15 @@ OpenAPI endpoint structure (implemented by Splice off-ledger service):
 Ordered by priority. Items 1-4 are audit hardening fixes (~50 LOC total, see AUDIT0.md recommendations #28-31).
 
 **P0 - Audit Hardening**
-1. `expireLockKey` pattern for withdraw/reject after lock expiry (medium complexity)
-2. `ensure amount > 0.0` on `SimpleHolding` and `LockedSimpleHolding` (small)
-3. `amount > 0.0` check in `TransferPreapproval_Send` (small)
-4. Contract keys on `SimpleTokenRules` and `TransferPreapproval` for ledger-enforced singleton semantics (small)
+1. ✅ `expireLockKey` pattern for withdraw/reject after lock expiry
+2. ✅ `ensure amount > 0.0` on `SimpleHolding` and `LockedSimpleHolding`
+3. ✅ `amount > 0.0` check in `TransferPreapproval_Send`
+4. ❌ Contract keys — NOT IMPLEMENTABLE on Daml LF 2.1 (Canton 3.x dropped contract key support)
 
 **P1 - Functional Gaps**
-5. `LockedSimpleHolding_Unlock` choice for manual lock release (small)
-6. `test_publicFetch` dedicated test (small)
-7. `tx-kind` metadata annotations (small)
+5. ✅ `LockedSimpleHolding_Unlock` choice for manual lock release
+6. ✅ `test_publicFetch` dedicated test
+7. ✅ `tx-kind` metadata annotations
 
 **P2 - Extensions**
 8. Off-ledger HTTP service

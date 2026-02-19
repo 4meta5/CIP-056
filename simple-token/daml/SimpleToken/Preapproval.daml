@@ -35,6 +35,9 @@ template TransferPreapproval
         -- Invariant #16: preapproval.instrumentId == transfer.instrumentId
         assertMsg "Preapproval instrumentId does not match transfer instrumentId"
           (instrumentId == transferInstrumentId)
+        -- Defense-in-depth: amount > 0.0 (also enforced by SimpleHolding ensure clause)
+        assertMsg "Transfer amount must be positive"
+          (amount > 0.0)
         -- Check expiry if set
         now <- getTime
         case expiresAt of

@@ -159,7 +159,7 @@ template SimpleTokenRules
           output = AllocationInstructionResult_Completed with
             allocationCid = toInterfaceContractId @Allocation allocationCid
           senderChangeCids
-          meta = emptyMetadata
+          meta = txKindMeta "transfer"
 
       allocationFactory_publicFetchImpl _selfCid arg = do
         assertMsg "expectedAdmin does not match factory admin"
@@ -224,7 +224,7 @@ selfTransfer admin transfer totalInput meta = do
     output = TransferInstructionResult_Completed with
       receiverHoldingCids = [toInterfaceContractId @Holding receiverCid]
     senderChangeCids
-    meta = emptyMetadata
+    meta = txKindMeta "merge-split"
 
 -- | Direct transfer: preapproval exists, send directly.
 -- The preapproval choice creates the receiver holding (needs receiver auth from preapproval signatories).
@@ -241,7 +241,7 @@ directTransfer admin transfer totalInput preapprovalCid meta = do
     output = TransferInstructionResult_Completed with
       receiverHoldingCids
     senderChangeCids
-    meta = emptyMetadata
+    meta = txKindMeta "transfer"
 
 -- | Two-step transfer: create locked holding + transfer instruction.
 twoStepTransfer : Party -> Transfer -> Decimal -> Update TransferInstructionResult
@@ -280,4 +280,4 @@ twoStepTransfer admin transfer totalInput = do
     output = TransferInstructionResult_Pending with
       transferInstructionCid = toInterfaceContractId @TransferInstruction instrCid
     senderChangeCids
-    meta = emptyMetadata
+    meta = txKindMeta "transfer"
