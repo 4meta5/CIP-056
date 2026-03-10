@@ -1,0 +1,55 @@
+# DAML build artifacts
+.daml/
+*.dar
+!dars/*
+
+# Haskell build artifacts
+dist
+dist-*
+dist-newstyle/
+cabal-dev
+*.o
+*.hi
+*.hie
+*.chi
+*.chs.h
+*.dyn_o
+*.dyn_hi
+.hpc
+.hsenv
+.cabal-sandbox/
+cabal.sandbox.config
+*.prof
+*.aux
+*.hp
+*.eventlog
+.stack-work/
+cabal.project.local
+cabal.project.local~
+.HTF/
+.ghc.environment.*
+
+# IDE
+.idea/
+.vscode/
+.DS_Store
+
+# Environment
+.envrc.private
+.env
+.env.*
+
+# Agent config and skills (install from daml-skills if needed)
+.claude/
+.codex/
+CLAUDE.md
+AGENTS.md
+
+# Verification tool clones (installed by scripts/setup.sh)
+tools/
+
+# Build/package manager artifacts
+node_modules/
+target/
+build/
+*.log

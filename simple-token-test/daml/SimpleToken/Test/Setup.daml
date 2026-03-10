@@ -1,0 +1,59 @@
+-- | Common test setup: party allocation, registry init, initial holdings.
+module SimpleToken.Test.Setup where
+
+import DA.Date
+import DA.Time
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1
+
+import SimpleToken.Testing.SimpleRegistry
+import SimpleToken.Testing.WalletClient
+
+import Daml.Script
+
+-- | Standard test parties.
+data TestParties = TestParties with
+    admin : Party
+    alice : Party
+    bob : Party
+    charlie : Party
+    executor : Party
+
+-- | Standard test environment with registry and parties.
+data TestEnv = TestEnv with
+    registry : SimpleRegistry
+    parties : TestParties
+
+-- | Standard demo time.
+demoTime : Time
+demoTime = time (date 2024 Jan 1) 0 0 0
+
+-- | Future deadline for transfers.
+futureDeadline : Time
+futureDeadline = time (date 2024 Dec 31) 0 0 0
+
+-- | Set up the standard test environment.
+setupTestEnv : Script TestEnv
+setupTestEnv = do
+  setTime demoTime
+  registry <- initialize "admin" "SimpleToken"
+  alice <- allocatePartyByHint (PartyIdHint "alice")
+  bob <- allocatePartyByHint (PartyIdHint "bob")
+  charlie <- allocatePartyByHint (PartyIdHint "charlie")
+  executor <- allocatePartyByHint (PartyIdHint "executor")
+  let parties = TestParties with
+        admin = registry.admin
+        alice; bob; charlie; executor
+  pure TestEnv with registry; parties
+
+-- | Give a party some tokens.
+fundParty : SimpleRegistry -> Party -> Decimal -> Script [ContractId Holding]
+fundParty registry owner amount = do
+  cid <- createHolding registry owner amount
+  pure [cid]
+
+-- | Give a party multiple small holdings (for fragmentation tests).
+fundPartyFragmented : SimpleRegistry -> Party -> Int -> Decimal -> Script [ContractId Holding]
+fundPartyFragmented registry owner count amountEach = do
+  mapA (\_ -> createHolding registry owner amountEach) [1..count]

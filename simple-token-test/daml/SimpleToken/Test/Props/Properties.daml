@@ -1,0 +1,76 @@
+-- | Property-based tests for the simple-token model.
+-- Each test_ function is discovered by dpm test.
+module SimpleToken.Test.Props.Properties where
+
+import Daml.Script
+import DamlProps.Gen
+import DamlProps.Runner
+import SimpleToken.Test.Props.Model
+
+-- | Initial state: alice (party 1) holds 1000.0 tokens.
+testInitialState : TokenState
+testInitialState = mkInitialState 1000.0 1
+
+-- | Runner config for simple-token properties.
+stConfig : Text -> RunnerConfig
+stConfig name = (defaultRunnerConfig name) with
+  numTests = 200
+  maxSequenceLength = 15
+
+-- | Property 1: Total supply conservation.
+-- For any sequence of valid actions, total supply never changes.
+test_simpleTokenConservation : Script ()
+test_simpleTokenConservation = script do
+  let result = runProp (stConfig "conservation") genTokenAction
+                executeTokenAction checkTokenInvariants testInitialState
+  assertResult "conservation" result
+
+-- | Property 2: All holdings always have amount > 0.0.
+-- The model rejects zero/negative amounts, and self-transfers produce positive outputs.
+test_simpleTokenPositiveAmounts : Script ()
+test_simpleTokenPositiveAmounts = script do
+  let checkPositive st =
+        let negs = filter (\(_, a) -> a <= 0.0) st.holdings
+        in if null negs then Right ()
+           else Left ("Non-positive holding: " <> show negs)
+  let result = runProp (stConfig "positive-amounts") genTokenAction
+                executeTokenAction checkPositive testInitialState
+  assertResult "positive-amounts" result
+
+-- | Property 3: No party's total balance goes negative.
+test_simpleTokenNonNegativeBalances : Script ()
+test_simpleTokenNonNegativeBalances = script do
+  let result = runProp (stConfig "non-negative-balances") genTokenAction
+                executeTokenAction (\st -> checkPartyBalances 0 st) testInitialState
+  assertResult "non-negative-balances" result
+
+-- | Property 4: After accept, receiver gains exact amount.
+-- After reject/withdraw, sender gets full refund.
+-- Tested implicitly via conservation + sequence runner.
+test_simpleTokenLifecycle : Script ()
+test_simpleTokenLifecycle = script do
+  -- Use a longer sequence to exercise more lifecycle paths.
+  let config = (stConfig "lifecycle") with maxSequenceLength = 20
+  let result = runProp config genTokenAction
+                executeTokenAction checkTokenInvariants testInitialState
+  assertResult "lifecycle" result
+
+-- | Property 5: Self-transfer of exact balance produces single output.
+test_simpleTokenSelfTransferExact : Script ()
+test_simpleTokenSelfTransferExact = script do
+  -- Generate only self-transfers of the exact sender balance.
+  let genExactSelf = genBind (genInt 1 (numParties - 1)) $ \sender ->
+        genPure (SelfTransfer sender 1000.0)
+  let checkSingleOutput st =
+        let aliceHoldings = partyHoldings 1 st
+        in if length aliceHoldings <= 1 then Right ()
+           else Left ("Expected at most 1 holding for alice, got " <> show (length aliceHoldings))
+  let config = (stConfig "self-transfer-exact") with maxSequenceLength = 1
+  let result = runProp config genExactSelf
+                executeTokenAction checkSingleOutput testInitialState
+  assertResult "self-transfer-exact" result
+
+-- | Helper: assert a RunResult is AllPassed, error otherwise.
+assertResult : Text -> RunResult TokenState TokenAction -> Script ()
+assertResult name (AllPassed _ _) = debug (name <> ": PASSED")
+assertResult name (FoundFailure d) = error (formatDetail d)

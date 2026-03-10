@@ -1,0 +1,154 @@
+-- | Allocation lifecycle tests (5 tests) including DvP.
+module SimpleToken.Test.Allocation where
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1
+import Splice.Api.Token.AllocationV1
+import Splice.Api.Token.AllocationInstructionV1
+
+import SimpleToken.Testing.SimpleRegistry
+import SimpleToken.Testing.WalletClient
+import SimpleToken.Test.Setup
+
+import Daml.Script
+
+-- | Helper: make a standard allocation spec.
+mkAllocationArgs : SimpleRegistry -> Party -> Party -> Party -> Decimal -> [ContractId Holding] -> AllocationFactory_Allocate
+mkAllocationArgs registry sender receiver executor amount inputCids =
+  AllocationFactory_Allocate with
+    expectedAdmin = registry.admin
+    allocation = AllocationSpecification with
+      settlement = SettlementInfo with
+        executor
+        settlementRef = Reference with id = "test-settlement"; cid = None
+        requestedAt = demoTime
+        allocateBefore = futureDeadline
+        settleBefore = futureDeadline
+        meta = emptyMetadata
+      transferLegId = "leg-1"
+      transferLeg = TransferLeg with
+        sender; receiver; amount
+        instrumentId = registry.instrumentId
+        meta = emptyMetadata
+    requestedAt = demoTime
+    inputHoldingCids = inputCids
+    extraArgs = emptyExtraArgs
+
+-- Test 8: Allocate -> Completed
+test_allocate : Script ()
+test_allocate = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+      exec = parties.executor
+  [h1] <- fundParty registry alice 100.0
+  let args = mkAllocationArgs registry alice bob exec 70.0 [h1]
+  enriched <- getAllocationFactory registry args
+  result <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  case result.output of
+    AllocationInstructionResult_Completed allocCid -> do
+      pure ()
+    _ -> fail "Expected Completed"
+  -- Alice has 30.0 change
+  assert (length result.senderChangeCids == 1)
+
+-- Test 9: Allocation -> ExecuteTransfer
+test_allocationExecuteTransfer : Script ()
+test_allocationExecuteTransfer = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+      exec = parties.executor
+  [h1] <- fundParty registry alice 100.0
+  let args = mkAllocationArgs registry alice bob exec 70.0 [h1]
+  enriched <- getAllocationFactory registry args
+  result <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  case result.output of
+    AllocationInstructionResult_Completed allocCid -> do
+      -- Execute the transfer
+      _ <- submitMulti [exec, alice, bob] [] $ exerciseCmd allocCid Allocation_ExecuteTransfer with
+        extraArgs = emptyExtraArgs
+      -- Bob gets 70.0
+      checkBalance bob registry.instrumentId 70.0
+    _ -> fail "Expected Completed"
+
+-- Test 10: Allocation -> Cancel
+test_allocationCancel : Script ()
+test_allocationCancel = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+      exec = parties.executor
+  [h1] <- fundParty registry alice 100.0
+  let args = mkAllocationArgs registry alice bob exec 100.0 [h1]
+  enriched <- getAllocationFactory registry args
+  result <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  case result.output of
+    AllocationInstructionResult_Completed allocCid -> do
+      -- Cancel
+      _ <- submitMulti [exec, alice, bob] [] $ exerciseCmd allocCid Allocation_Cancel with
+        extraArgs = emptyExtraArgs
+      -- Alice gets funds back
+      checkBalance alice registry.instrumentId 100.0
+    _ -> fail "Expected Completed"
+
+-- Test 11: Allocation -> Withdraw
+test_allocationWithdraw : Script ()
+test_allocationWithdraw = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+      exec = parties.executor
+  [h1] <- fundParty registry alice 100.0
+  let args = mkAllocationArgs registry alice bob exec 100.0 [h1]
+  enriched <- getAllocationFactory registry args
+  result <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  case result.output of
+    AllocationInstructionResult_Completed allocCid -> do
+      -- Alice withdraws
+      _ <- submit alice $ exerciseCmd allocCid Allocation_Withdraw with
+        extraArgs = emptyExtraArgs
+      -- Alice gets funds back
+      checkBalance alice registry.instrumentId 100.0
+    _ -> fail "Expected Completed"
+
+-- Test 12: DvP with two legs (atomic settlement)
+test_dvpTwoLegs : Script ()
+test_dvpTwoLegs = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+      exec = parties.executor
+  -- Alice has 100 tokens, Bob has 50 tokens
+  [hAlice] <- fundParty registry alice 100.0
+  [hBob] <- fundParty registry bob 50.0
+  -- Leg 1: Alice sends 80 to Bob
+  let args1 = mkAllocationArgs registry alice bob exec 80.0 [hAlice]
+  enriched1 <- getAllocationFactory registry args1
+  result1 <- submitWithDisc alice enriched1.disclosures $
+    exerciseCmd enriched1.factoryCid enriched1.arg
+  -- Leg 2: Bob sends 30 to Alice
+  let args2 = (mkAllocationArgs registry bob alice exec 30.0 [hBob])
+        with allocation = (mkAllocationArgs registry bob alice exec 30.0 [hBob]).allocation
+              with settlement = args1.allocation.settlement
+  enriched2 <- getAllocationFactory registry args2
+  result2 <- submitWithDisc bob enriched2.disclosures $
+    exerciseCmd enriched2.factoryCid enriched2.arg
+  -- Execute both legs
+  case (result1.output, result2.output) of
+    (AllocationInstructionResult_Completed alloc1, AllocationInstructionResult_Completed alloc2) -> do
+      -- Execute leg 1
+      _ <- submitMulti [exec, alice, bob] [] $ exerciseCmd alloc1 Allocation_ExecuteTransfer with
+        extraArgs = emptyExtraArgs
+      -- Execute leg 2
+      _ <- submitMulti [exec, alice, bob] [] $ exerciseCmd alloc2 Allocation_ExecuteTransfer with
+        extraArgs = emptyExtraArgs
+      -- Alice: 100 - 80 + 30 = 50
+      checkBalance alice registry.instrumentId 50.0
+      -- Bob: 50 - 30 + 80 = 100
+      checkBalance bob registry.instrumentId 100.0
+    _ -> fail "Expected both allocations to complete"

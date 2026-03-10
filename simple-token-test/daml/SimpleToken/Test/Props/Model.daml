@@ -1,0 +1,248 @@
+-- | Pure state-machine model of canton-network-token-standard simple-token.
+-- Models the transfer logic from SimpleToken/Rules.daml without Script effects.
+-- Parties are represented as Int indices: 0=admin, 1=alice, 2=bob, 3=charlie.
+--
+-- Design: The executor returns Right state (unchanged) for invalid preconditions
+-- (e.g., insufficient funds). Left is only returned for true invariant violations.
+-- This matches Echidna/Foundry semantics: invalid actions are no-ops.
+module SimpleToken.Test.Props.Model where
+
+import DamlProps.Gen
+
+-- | Number of parties in the model.
+numParties : Int
+numParties = 4
+
+-- | A holding: (ownerIdx, amount).
+type Holding = (Int, Decimal)
+
+-- | A locked holding: (ownerIdx, amount, lockId).
+type LockedHolding = (Int, Decimal, Int)
+
+-- | A pending transfer instruction: (senderIdx, receiverIdx, amount, instrId).
+type PendingInstruction = (Int, Int, Decimal, Int)
+
+-- | The ledger state as a pure value.
+data TokenState = TokenState with
+  holdings : [Holding]
+  locked : [LockedHolding]
+  pending : [PendingInstruction]
+  nextId : Int
+  initialSupply : Decimal
+    deriving (Show, Eq)
+
+-- | Create initial state: one party holds the full supply.
+mkInitialState : Decimal -> Int -> TokenState
+mkInitialState supply ownerIdx = TokenState
+  [(ownerIdx, supply)]
+  []
+  []
+  1
+  supply
+
+-- | Actions that can be performed on the token state.
+data TokenAction
+  = SelfTransfer with stSender : Int; stAmount : Decimal
+  | DirectTransfer with dtSender : Int; dtReceiver : Int; dtAmount : Decimal
+  | TwoStepInitiate with tsInitSender : Int; tsInitReceiver : Int; tsInitAmount : Decimal
+  | TwoStepAccept with tsaInstrId : Int
+  | TwoStepReject with tsrInstrId : Int
+  | TwoStepWithdraw with tswInstrId : Int
+    deriving (Show, Eq)
+
+-- | Get total holdings for a party.
+partyBalance : Int -> TokenState -> Decimal
+partyBalance idx state =
+  let held = foldl (\acc (o, a) -> if o == idx then acc + a else acc) 0.0 state.holdings
+      lock = foldl (\acc (o, a, _) -> if o == idx then acc + a else acc) 0.0 state.locked
+  in held + lock
+
+-- | Get unlocked holdings for a party.
+partyHoldings : Int -> TokenState -> [Holding]
+partyHoldings idx state =
+  filter (\(o, _) -> o == idx) state.holdings
+
+-- | Total supply across all holdings and locked holdings.
+-- Pending instructions don't add supply — they reference the same value as locked holdings.
+totalSupply : TokenState -> Decimal
+totalSupply state =
+  let held = foldl (\acc (_, a) -> acc + a) 0.0 state.holdings
+      lock = foldl (\acc (_, a, _) -> acc + a) 0.0 state.locked
+  in held + lock
+
+-- | Execute a token action. Invalid preconditions → Right state (no-op).
+-- Only returns Left for true invariant violations (bugs in the model).
+executeTokenAction : TokenState -> TokenAction -> Either Text TokenState
+executeTokenAction state (SelfTransfer sender amount) =
+  let senderHlds = partyHoldings sender state
+      senderTotal = foldl (\acc (_, a) -> acc + a) 0.0 senderHlds
+  in
+  -- Precondition checks → no-op on failure
+  if amount <= 0.0 then Right state
+  else if null senderHlds then Right state
+  else if senderTotal < amount then Right state
+  else
+    let remaining = filter (\(o, _) -> o /= sender) state.holdings
+        change = senderTotal - amount
+        newHoldings = if change > 0.0
+                      then (sender, amount) :: (sender, change) :: remaining
+                      else (sender, amount) :: remaining
+    in Right state with holdings = newHoldings
+
+executeTokenAction state (DirectTransfer sender receiver amount) =
+  let senderHlds = partyHoldings sender state
+      senderTotal = foldl (\acc (_, a) -> acc + a) 0.0 senderHlds
+  in
+  if amount <= 0.0 then Right state
+  else if sender == receiver then Right state
+  else if null senderHlds then Right state
+  else if senderTotal < amount then Right state
+  else
+    let remaining = filter (\(o, _) -> o /= sender) state.holdings
+        change = senderTotal - amount
+        newHoldings = (receiver, amount)
+                   :: (if change > 0.0 then [(sender, change)] else [])
+                   <> remaining
+    in Right state with holdings = newHoldings
+
+executeTokenAction state (TwoStepInitiate sender receiver amount) =
+  let senderHlds = partyHoldings sender state
+      senderTotal = foldl (\acc (_, a) -> acc + a) 0.0 senderHlds
+  in
+  if amount <= 0.0 then Right state
+  else if sender == receiver then Right state
+  else if null senderHlds then Right state
+  else if senderTotal < amount then Right state
+  else
+    let remaining = filter (\(o, _) -> o /= sender) state.holdings
+        change = senderTotal - amount
+        instrId = state.nextId
+        newLocked = (sender, amount, instrId) :: state.locked
+        newPending = (sender, receiver, amount, instrId) :: state.pending
+        newHoldings = if change > 0.0
+                      then (sender, change) :: remaining
+                      else remaining
+    in Right state with
+        holdings = newHoldings
+        locked = newLocked
+        pending = newPending
+        nextId = state.nextId + 1
+
+executeTokenAction state (TwoStepAccept instrId) =
+  case findPending instrId state.pending of
+    None -> Right state  -- no-op: instruction doesn't exist
+    Some (_, receiver, amount, _) ->
+      let newPending = filter (\(_, _, _, i) -> i /= instrId) state.pending
+          newLocked = filter (\(_, _, i) -> i /= instrId) state.locked
+          newHoldings = (receiver, amount) :: state.holdings
+      in Right state with
+          holdings = newHoldings
+          locked = newLocked
+          pending = newPending
+
+executeTokenAction state (TwoStepReject instrId) =
+  case findPending instrId state.pending of
+    None -> Right state
+    Some (sender, _, amount, _) ->
+      let newPending = filter (\(_, _, _, i) -> i /= instrId) state.pending
+          newLocked = filter (\(_, _, i) -> i /= instrId) state.locked
+          newHoldings = (sender, amount) :: state.holdings
+      in Right state with
+          holdings = newHoldings
+          locked = newLocked
+          pending = newPending
+
+executeTokenAction state (TwoStepWithdraw instrId) =
+  case findPending instrId state.pending of
+    None -> Right state
+    Some (sender, _, amount, _) ->
+      let newPending = filter (\(_, _, _, i) -> i /= instrId) state.pending
+          newLocked = filter (\(_, _, i) -> i /= instrId) state.locked
+          newHoldings = (sender, amount) :: state.holdings
+      in Right state with
+          holdings = newHoldings
+          locked = newLocked
+          pending = newPending
+
+-- | Find a pending instruction by ID.
+findPending : Int -> [PendingInstruction] -> Optional PendingInstruction
+findPending _ [] = None
+findPending targetId ((s, r, a, i) :: rest) =
+  if i == targetId then Some (s, r, a, i)
+  else findPending targetId rest
+
+-- | Check all invariants on the token state.
+checkTokenInvariants : TokenState -> Either Text ()
+checkTokenInvariants state =
+  let supply = totalSupply state
+  in if supply /= state.initialSupply
+     then Left ("Conservation violated: expected=" <> show state.initialSupply
+               <> " actual=" <> show supply)
+  else
+    let negHoldings = filter (\(_, a) -> a <= 0.0) state.holdings
+        negLocked = filter (\(_, a, _) -> a <= 0.0) state.locked
+    in if not (null negHoldings)
+       then Left ("Non-positive holding: " <> show negHoldings)
+    else if not (null negLocked)
+       then Left ("Non-positive locked holding: " <> show negLocked)
+    else checkPartyBalances 0 state
+
+-- | Check non-negative per-party balances.
+checkPartyBalances : Int -> TokenState -> Either Text ()
+checkPartyBalances idx state
+  | idx >= numParties = Right ()
+  | otherwise =
+    let bal = partyBalance idx state
+    in if bal < 0.0
+       then Left ("Negative balance for party " <> show idx <> ": " <> show bal)
+       else checkPartyBalances (idx + 1) state
+
+-- | Generate a random token action.
+genTokenAction : Gen TokenAction
+genTokenAction = genOneOf
+  [ genSelfTransfer
+  , genDirectTransfer
+  , genTwoStepInitiate
+  , genTwoStepAccept
+  , genTwoStepReject
+  , genTwoStepWithdraw
+  ]
+
+genSelfTransfer : Gen TokenAction
+genSelfTransfer =
+  genBind (genInt 1 (numParties - 1)) $ \sender ->
+  genBind (genDecimal 0.0000000001 500.0) $ \amount ->
+  genPure (SelfTransfer sender amount)
+
+genDirectTransfer : Gen TokenAction
+genDirectTransfer =
+  genBind (genInt 1 (numParties - 1)) $ \sender ->
+  genBind (genInt 1 (numParties - 1)) $ \receiver ->
+  genBind (genDecimal 0.0000000001 500.0) $ \amount ->
+  if sender == receiver
+  then genPure (SelfTransfer sender amount)
+  else genPure (DirectTransfer sender receiver amount)
+
+genTwoStepInitiate : Gen TokenAction
+genTwoStepInitiate =
+  genBind (genInt 1 (numParties - 1)) $ \sender ->
+  genBind (genInt 1 (numParties - 1)) $ \receiver ->
+  genBind (genDecimal 0.0000000001 500.0) $ \amount ->
+  if sender == receiver
+  then genPure (SelfTransfer sender amount)
+  else genPure (TwoStepInitiate sender receiver amount)
+
+genTwoStepAccept : Gen TokenAction
+genTwoStepAccept =
+  genBind (genInt 0 20) $ \instrId ->
+  genPure (TwoStepAccept instrId)
+
+genTwoStepReject : Gen TokenAction
+genTwoStepReject =
+  genBind (genInt 0 20) $ \instrId ->
+  genPure (TwoStepReject instrId)
+
+genTwoStepWithdraw : Gen TokenAction
+genTwoStepWithdraw =
+  genBind (genInt 0 20) $ \instrId ->
+  genPure (TwoStepWithdraw instrId)

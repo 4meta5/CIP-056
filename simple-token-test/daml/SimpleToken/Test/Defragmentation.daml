@@ -1,0 +1,97 @@
+-- | Defragmentation and multi-instrument tests (2 tests).
+module SimpleToken.Test.Defragmentation where
+
+import DA.TextMap qualified as TextMap
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1
+import Splice.Api.Token.TransferInstructionV1
+
+import SimpleToken.Preapproval (TransferPreapproval(..))
+import SimpleToken.Rules (SimpleTokenRules(..))
+import SimpleToken.ContextUtils
+import SimpleToken.Testing.SimpleRegistry
+import SimpleToken.Testing.WalletClient
+import SimpleToken.Test.Setup
+
+import Daml.Script
+
+-- Test 25: Self-transfer merge 10 holdings into 1
+test_selfTransferMerge10Holdings : Script ()
+test_selfTransferMerge10Holdings = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  -- Create 10 small holdings of 10.0 each
+  holdings <- fundPartyFragmented registry alice 10 10.0
+  -- Verify we have 10 holdings
+  allHoldings <- listHoldingCids alice registry.instrumentId
+  assert (length allHoldings == 10)
+  -- Self-transfer: merge all into 100.0
+  let transfer = Transfer with
+        sender = alice; receiver = alice; amount = 100.0
+        instrumentId = registry.instrumentId
+        requestedAt = demoTime; executeBefore = futureDeadline
+        inputHoldingCids = allHoldings
+        meta = emptyMetadata
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  result <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  case result.output of
+    TransferInstructionResult_Completed _ -> pure ()
+    _ -> fail "Expected Completed"
+  -- Verify: now only 1 holding of 100.0
+  finalHoldings <- listHoldings alice registry.instrumentId
+  assert (length finalHoldings == 1)
+  checkBalance alice registry.instrumentId 100.0
+
+-- Test 26: Multi-instrument transfer
+test_multiInstrumentTransfer : Script ()
+test_multiInstrumentTransfer = do
+  setTime demoTime
+  -- Create a registry supporting multiple instruments
+  registry <- initializeMulti "multi-admin" ["USD", "EUR"]
+  alice <- allocatePartyByHint (PartyIdHint "alice-multi")
+  bob <- allocatePartyByHint (PartyIdHint "bob-multi")
+  let instrUSD = InstrumentId with admin = registry.admin; id = "USD"
+      instrEUR = InstrumentId with admin = registry.admin; id = "EUR"
+  -- Create holdings
+  hUSD <- createHoldingForInstrument registry.admin alice instrUSD 1000.0
+  hEUR <- createHoldingForInstrument registry.admin alice instrEUR 500.0
+  -- Create preapprovals for bob for both instruments
+  _ <- submitMulti [registry.admin, bob] [] $ createCmd TransferPreapproval with
+    admin = registry.admin; receiver = bob
+    instrumentId = instrUSD; expiresAt = None; meta = emptyMetadata
+  _ <- submitMulti [registry.admin, bob] [] $ createCmd TransferPreapproval with
+    admin = registry.admin; receiver = bob
+    instrumentId = instrEUR; expiresAt = None; meta = emptyMetadata
+  -- Transfer USD
+  let transferUSD = Transfer with
+        sender = alice; receiver = bob; amount = 300.0
+        instrumentId = instrUSD
+        requestedAt = demoTime; executeBefore = futureDeadline
+        inputHoldingCids = [hUSD]; meta = emptyMetadata
+  -- Need to manually build the context with the USD preapproval
+  [(rulesCid, _)] <- query @SimpleTokenRules registry.admin
+  let tfCid = toInterfaceContractId @TransferFactory rulesCid
+  rulesDisc <- queryDisc @SimpleTokenRules registry.admin rulesCid
+  usdPreapprovals <- queryFilter @TransferPreapproval registry.admin
+    (\p -> p.receiver == bob && p.instrumentId == instrUSD)
+  case usdPreapprovals of
+    (pCid, _) :: _ -> do
+      pDisc <- queryDisc @TransferPreapproval registry.admin pCid
+      let ctx = ChoiceContext with
+            values = TextMap.fromList [(transferPreapprovalContextKey, AV_ContractId (coerceContractId pCid))]
+      result <- submitWithDisc alice (rulesDisc <> pDisc) $
+        exerciseCmd tfCid TransferFactory_Transfer with
+          expectedAdmin = registry.admin
+          transfer = transferUSD
+          extraArgs = ExtraArgs with context = ctx; meta = emptyMetadata
+      case result.output of
+        TransferInstructionResult_Completed _ -> pure ()
+        _ -> fail "Expected Completed for USD transfer"
+    _ -> fail "USD preapproval not found"
+  -- Verify balances
+  checkBalance alice instrUSD 700.0
+  checkBalance bob instrUSD 300.0
+  -- EUR untouched
+  checkBalance alice instrEUR 500.0
