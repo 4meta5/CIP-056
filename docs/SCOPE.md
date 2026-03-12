@@ -6,7 +6,7 @@ This project delivers a minimal, correct DAML/Haskell implementation of the 6 CI
 
 ## 2. Omitted Feature Analysis
 
-After running three open-source verification tools ([daml-lint](https://github.com/4meta5/daml-lint), [daml-verify](https://github.com/4meta5/daml-verify), [daml-props](https://github.com/4meta5/daml-props)) and performing manual code review against Splice, a pattern emerged: most Splice bugs (15 of 22 MEDIUM issues identified by tool analysis) were classified NOT APPLICABLE to our simple token implementation because the vulnerable subsystems don't exist in our architecture. This section examines six feature categories omitted from this project and asks whether each is required for a production CIP-056 token registry.
+After running three open-source verification tools ([daml-lint](https://github.com/OpenZeppelin/daml-lint), [daml-verify](https://github.com/OpenZeppelin/daml-verify), [daml-props](https://github.com/OpenZeppelin/daml-props)) and performing manual code review against Splice, a pattern emerged: most Splice bugs (15 of 22 MEDIUM issues identified by tool analysis) were classified NOT APPLICABLE to our simple token implementation because the vulnerable subsystems don't exist in our architecture. This section examines six feature categories omitted from this project and asks whether each is required for a production CIP-056 token registry.
 
 ### 2.1 Mining Rounds
 
