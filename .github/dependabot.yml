@@ -1,0 +1,17 @@
+---
+version: 2
+# opt in to updates for ecosystems that are not yet GA.
+enable-beta-ecosystems: true
+updates:
+  # Maintain dependencies for GitHub Actions
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions-deps:
+        patterns:
+          - '*'
+    commit-message:
+      prefix: 'chore(deps): '
+
