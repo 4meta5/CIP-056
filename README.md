@@ -1,5 +1,10 @@
 # canton-token-template
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+
+> [!WARNING]
+> This software is experimental and not intended for production use. Use at your own risk.
+
 A DAML template for building CIP-056 token registries on the Canton Network. Clone it, run the setup script, start writing contracts.
 
 800 lines of production code implement all 6 CIP-056 on-ledger interfaces. 36 tests cover transfer lifecycle, allocation/DvP, defragmentation, and 20 security invariants. Three verification tools (static analysis, property testing, formal proofs) validate the result.
@@ -66,6 +71,3 @@ For AI-assisted development with Claude Code or Codex, see [daml-skills](https:/
 - [docs/PLAN.md](docs/PLAN.md) -- implementation plan, security invariants, test criteria
 - [docs/AUDIT.md](docs/AUDIT.md) -- verification report from three tools
 
-## License
-
-Apache 2.0. See `LICENSE`.
