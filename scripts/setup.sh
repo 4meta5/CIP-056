@@ -8,6 +8,9 @@ TOOLS_DIR="$PROJECT_DIR/tools"
 SKIP_VERIFY=false
 CI_MODE=false
 
+DAML_LINT_REPO_URL="https://github.com/OpenZeppelin/daml-lint"
+DAML_VERIFY_REPO_URL="https://github.com/OpenZeppelin/daml-verify"
+
 # ---------- Parse flags ----------
 for arg in "$@"; do
   case "$arg" in
@@ -129,7 +132,7 @@ else
     info "daml-lint already installed"
   elif check_cmd cargo; then
     if [ ! -d "$TOOLS_DIR/daml-lint" ]; then
-      git clone https://github.com/4meta5/daml-lint "$TOOLS_DIR/daml-lint"
+      git clone "$DAML_LINT_REPO_URL" "$TOOLS_DIR/daml-lint"
     fi
     cd "$TOOLS_DIR/daml-lint" && cargo build --release
     info "daml-lint built at $TOOLS_DIR/daml-lint/target/release/daml-lint"
@@ -142,7 +145,7 @@ else
   info "Setting up daml-verify..."
   if check_cmd python3; then
     if [ ! -d "$TOOLS_DIR/daml-verify" ]; then
-      git clone https://github.com/4meta5/daml-verify "$TOOLS_DIR/daml-verify"
+      git clone "$DAML_VERIFY_REPO_URL" "$TOOLS_DIR/daml-verify"
     fi
     cd "$TOOLS_DIR/daml-verify"
     if [ ! -d .venv ]; then
