@@ -6,7 +6,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 TOOLS_DIR="$PROJECT_DIR/tools"
 
 SKIP_VERIFY=false
-CI_MODE=false
+NON_INTERACTIVE_MODE=false
 
 DAML_LINT_REPO_URL="https://github.com/OpenZeppelin/daml-lint"
 DAML_VERIFY_REPO_URL="https://github.com/OpenZeppelin/daml-verify"
@@ -15,12 +15,12 @@ DAML_VERIFY_REPO_URL="https://github.com/OpenZeppelin/daml-verify"
 for arg in "$@"; do
   case "$arg" in
     --skip-verification) SKIP_VERIFY=true ;;
-    --ci) CI_MODE=true ;;
+    --ci) NON_INTERACTIVE_MODE=true ;;
     -h|--help)
       echo "Usage: scripts/setup.sh [--skip-verification] [--ci]"
       echo ""
       echo "  --skip-verification  Skip installing daml-lint and daml-verify"
-      echo "  --ci                 Non-interactive mode for CI (no color, exit 1 on failure)"
+      echo "  --ci                 Non-interactive mode for local automation (no color, exit 1 on failure)"
       exit 0
       ;;
     *) echo "Unknown flag: $arg"; exit 2 ;;
@@ -95,7 +95,7 @@ else
   warn "dpm not found. Install the Digital Asset Package Manager:"
   echo "  See https://docs.daml.com for installation instructions"
   echo "  Binary should be at ~/.dpm/bin/dpm"
-  if [ "$CI_MODE" = true ]; then
+  if [ "$NON_INTERACTIVE_MODE" = true ]; then
     fail "dpm is required"
   fi
 fi
