@@ -62,7 +62,7 @@ For AI-assisted development with Claude Code or Codex, see [daml-skills](https:/
 ## Prerequisites
 
 - [dpm](https://docs.daml.com) (Digital Asset Package Manager)
-- Daml SDK 3.4.10
+- Daml SDK 3.4.11
 - Java 21
 
 ## Docs

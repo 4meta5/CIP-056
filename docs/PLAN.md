@@ -401,7 +401,7 @@ canton-network-token-standard/
         AllocationRequest.daml           -- SimpleAllocationRequest (test helper, in production DAR)
         ContextUtils.daml                -- ToAnyValue/FromAnyValue, context lookup helpers
         Preapproval.daml                 -- TransferPreapproval (nonconsuming)
-    daml.yaml                            -- SDK 3.4.10, target 2.1, depends on 6 splice DARs
+    daml.yaml                            -- SDK 3.4.11, target 2.1, depends on 6 splice DARs
 
   simple-token-test/                     -- Test DAR (IMPLEMENTED, 36/36 passing)
     daml/
@@ -818,4 +818,4 @@ Known Canton Network constraints relevant to this implementation.
 
 **Disclosure and privacy:** Canton's privacy model means wallets may not see contracts they need to exercise choices against. Our `extraObservers` field on `LockedSimpleHolding` addresses this for on-ledger flows by ensuring receivers and executors can see locked holdings.
 
-**SDK and Canton version pinning:** The ecosystem is evolving rapidly (Polyglot Canton with EVM support announced late 2025, automated fee calculation via oracles proposed). Pinning SDK versions early and tracking the CHANGELOG is essential. Current pin: SDK 3.4.10, LF 2.1.
+**SDK and Canton version pinning:** The ecosystem is evolving rapidly (Polyglot Canton with EVM support announced late 2025, automated fee calculation via oracles proposed). Pinning SDK versions early and tracking the CHANGELOG is essential. Current pin: SDK 3.4.11, LF 2.1.

@@ -2,7 +2,7 @@
 
 ## 1. Mission
 
-This project delivers a minimal, correct DAML/Haskell implementation of the 6 CIP-056 on-ledger interfaces (`splice-api-token-*-v1` version 1.0.0). It proves a non-Splice registry can implement the standard and interoperate with standard-compliant wallets and the existing Splice off-ledger infrastructure. Spec: CIP-0056 Final (2025-03-07, approved 2025-03-31). SDK: 3.4.10, LF target: 2.1.
+This project delivers a minimal, correct DAML/Haskell implementation of the 6 CIP-056 on-ledger interfaces (`splice-api-token-*-v1` version 1.0.0). It proves a non-Splice registry can implement the standard and interoperate with standard-compliant wallets and the existing Splice off-ledger infrastructure. Spec: CIP-0056 Final (2025-03-07, approved 2025-03-31). SDK: 3.4.11, LF target: 2.1.
 
 ## 2. Omitted Feature Analysis
 
