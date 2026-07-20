@@ -19,6 +19,7 @@ import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.HoldingV1
 import Splice.Api.Token.TransferInstructionV1
 
+import SimpleToken.Holding
 import SimpleToken.Rules
 import SimpleToken.Preapproval
 import SimpleToken.ContextUtils
@@ -130,3 +131,17 @@ test_genuineHoldingInputStillWorks = do
     TransferInstructionResult_Completed _ -> pure ()
     _ -> fail "Expected Completed for a genuine registry holding"
   checkBalance alice registry.instrumentId 1000000.0
+
+-- Test (56-1): a holding whose admin is not the instrument's issuing admin cannot be created.
+test_holdingAdminMustMatchInstrumentAdmin : Script ()
+test_holdingAdminMustMatchInstrumentAdmin = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      charlie = parties.charlie
+  -- instrumentId.admin (charlie) /= holding admin (registry.admin) -> the ensure must reject it.
+  submitMultiMustFail [registry.admin, alice] [] $ createCmd SimpleHolding with
+    admin = registry.admin
+    owner = alice
+    instrumentId = InstrumentId with admin = charlie; id = "SimpleToken"
+    amount = 100.0
+    meta = emptyMetadata

@@ -1,5 +1,18 @@
--- | Allocation request template for DvP test scenarios.
--- Allows an executor to request allocations from senders.
+-- | Standard-interface demonstration stub for @AllocationRequest@ (CIP-0056).
+--
+-- SCOPE (56-3): this template exists only to witness that the registry can implement the
+-- standard @AllocationRequest@ interface. It is NOT part of the reference allocation flow —
+-- nothing in this package creates or consumes it (the real path is SimpleTokenRules'
+-- @AllocationFactory@ -> @SimpleAllocation@), and the reject/withdraw choice bodies are
+-- intentionally no-ops. It is therefore left deliberately unvalidated.
+--
+-- A PRODUCTION request template (one that end users actually submit against) MUST add [FUTURE]:
+--   * settlement field ordering: requestedAt <= allocateBefore <= settleBefore;
+--   * non-empty @transferLegs@, each with amount > 0.0;
+--   * @senders@ equals exactly the transfer legs' senders — otherwise an omitted sender's leg
+--     silently stalls, and an extra observer gets needless disclosure and can grief via reject;
+--   * reject/withdraw gated to an actual sender/executor (the no-op bodies below authorize via
+--     the interface controller only).
 module SimpleToken.AllocationRequest where
 
 import DA.TextMap qualified as TextMap
