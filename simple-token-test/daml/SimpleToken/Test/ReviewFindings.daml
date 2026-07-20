@@ -145,3 +145,21 @@ test_holdingAdminMustMatchInstrumentAdmin = do
     instrumentId = InstrumentId with admin = charlie; id = "SimpleToken"
     amount = 100.0
     meta = emptyMetadata
+
+-- Test (56-3a): TransferPreapproval_Send rejects a totalInput that does not cover the amount
+-- (defense-in-depth for direct callers that bypass the factory's invariant #18).
+test_preapprovalTotalInputMustCoverAmount : Script ()
+test_preapprovalTotalInputMustCoverAmount = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+  preapprovalCid <- createPreapproval registry bob None
+  -- Claim only 10 of input while sending 50 -> must fail before any holding is minted.
+  submitMultiMustFail [registry.admin, alice] [] $
+    exerciseCmd preapprovalCid TransferPreapproval_Send with
+      sender = alice
+      expectedReceiver = bob
+      transferInstrumentId = registry.instrumentId
+      amount = 50.0
+      totalInput = 10.0
+      holdingMeta = emptyMetadata
