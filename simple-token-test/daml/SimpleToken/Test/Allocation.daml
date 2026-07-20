@@ -138,17 +138,49 @@ test_dvpTwoLegs = do
   enriched2 <- getAllocationFactory registry args2
   result2 <- submitWithDisc bob enriched2.disclosures $
     exerciseCmd enriched2.factoryCid enriched2.arg
-  -- Execute both legs
+  -- Execute both legs atomically (56-5): a single transaction, so either both settle or neither.
   case (result1.output, result2.output) of
     (AllocationInstructionResult_Completed alloc1, AllocationInstructionResult_Completed alloc2) -> do
-      -- Execute leg 1
-      _ <- submitMulti [exec, alice, bob] [] $ exerciseCmd alloc1 Allocation_ExecuteTransfer with
-        extraArgs = emptyExtraArgs
-      -- Execute leg 2
-      _ <- submitMulti [exec, alice, bob] [] $ exerciseCmd alloc2 Allocation_ExecuteTransfer with
-        extraArgs = emptyExtraArgs
+      let execLeg1 = exerciseCmd alloc1 Allocation_ExecuteTransfer with extraArgs = emptyExtraArgs
+          execLeg2 = exerciseCmd alloc2 Allocation_ExecuteTransfer with extraArgs = emptyExtraArgs
+      _ <- submitMulti [exec, alice, bob] [] (execLeg1 *> execLeg2)
       -- Alice: 100 - 80 + 30 = 50
       checkBalance alice registry.instrumentId 50.0
       -- Bob: 50 - 30 + 80 = 100
       checkBalance bob registry.instrumentId 100.0
+    _ -> fail "Expected both allocations to complete"
+
+-- Test 13 (56-5): atomic rollback — if one leg of a DvP fails, neither leg settles.
+test_dvpAtomicRollback : Script ()
+test_dvpAtomicRollback = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+      exec = parties.executor
+  [hAlice] <- fundParty registry alice 100.0
+  [hBob] <- fundParty registry bob 50.0
+  -- Leg 1: Alice allocates 80 to Bob. Leg 2: Bob allocates 30 to Alice (shared settlement).
+  let args1 = mkAllocationArgs registry alice bob exec 80.0 [hAlice]
+  enriched1 <- getAllocationFactory registry args1
+  result1 <- submitWithDisc alice enriched1.disclosures $
+    exerciseCmd enriched1.factoryCid enriched1.arg
+  let args2 = (mkAllocationArgs registry bob alice exec 30.0 [hBob])
+        with allocation = (mkAllocationArgs registry bob alice exec 30.0 [hBob]).allocation
+              with settlement = args1.allocation.settlement
+  enriched2 <- getAllocationFactory registry args2
+  result2 <- submitWithDisc bob enriched2.disclosures $
+    exerciseCmd enriched2.factoryCid enriched2.arg
+  case (result1.output, result2.output) of
+    (AllocationInstructionResult_Completed alloc1, AllocationInstructionResult_Completed alloc2) -> do
+      -- Bob withdraws leg 2, archiving alloc2 (and returning his 30).
+      _ <- submit bob $ exerciseCmd alloc2 Allocation_Withdraw with extraArgs = emptyExtraArgs
+      -- Atomically execute both legs: leg 2 now refers to an archived allocation, so the whole
+      -- transaction must fail — and critically, leg 1 must NOT have settled.
+      let execLeg1 = exerciseCmd alloc1 Allocation_ExecuteTransfer with extraArgs = emptyExtraArgs
+          execLeg2 = exerciseCmd alloc2 Allocation_ExecuteTransfer with extraArgs = emptyExtraArgs
+      submitMultiMustFail [exec, alice, bob] [] (execLeg1 *> execLeg2)
+      -- Nothing moved: Alice still holds everything (80 still locked in alloc1 + 20 change = 100);
+      -- Bob never received Alice's 80 (his 20 change + 30 returned by withdraw = 50).
+      checkBalance alice registry.instrumentId 100.0
+      checkBalance bob registry.instrumentId 50.0
     _ -> fail "Expected both allocations to complete"

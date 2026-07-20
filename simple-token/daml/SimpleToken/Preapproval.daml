@@ -11,6 +11,12 @@ import SimpleToken.Holding
 -- The TransferPreapproval_Send choice is nonconsuming, making it reusable.
 -- The choice creates the receiver holding (and sender change) using the receiver's
 -- signatory authorization from this contract.
+--
+-- SCOPE (56-2): this is intentionally OPEN-BY-DEFAULT — any sender may pay the receiver, so the
+-- receiver establishes one preapproval per instrument. On a permissioned network of vetted
+-- counterparties this is the ergonomic happy path. Restricting a preapproval to a specific sender
+-- is a deliberate opt-in extension (e.g. a `ScopedTransferPreapproval` carrying an allowed-sender
+-- set), tracked [FUTURE] — it is not the default, and this base template is not changed for it.
 template TransferPreapproval
   with
     admin : Party
@@ -26,18 +32,31 @@ template TransferPreapproval
     nonconsuming choice TransferPreapproval_Send : ([ContractId Holding], [ContractId Holding])
       with
         sender : Party
+        expectedReceiver : Party
         transferInstrumentId : InstrumentId
         amount : Decimal
         totalInput : Decimal
         holdingMeta : Metadata
       controller admin, sender
       do
+        -- 56-4: bind this preapproval to the transfer's intended receiver.
+        -- The preapproval cid is supplied via untrusted choice context; without this
+        -- check a preapproval for a different receiver would silently redirect the funds.
+        assertMsg "Preapproval receiver does not match transfer receiver"
+          (receiver == expectedReceiver)
         -- Invariant #16: preapproval.instrumentId == transfer.instrumentId
         assertMsg "Preapproval instrumentId does not match transfer instrumentId"
           (instrumentId == transferInstrumentId)
         -- Defense-in-depth: amount > 0.0 (also enforced by SimpleHolding ensure clause)
         assertMsg "Transfer amount must be positive"
           (amount > 0.0)
+        -- 56-3a: this choice mints from a caller-supplied `totalInput` rather than from archived
+        -- inputs, so it trusts its caller (SimpleTokenRules, exercised with admin authority) to have
+        -- archived inputs summing to `totalInput`. Assert as defense-in-depth — mirroring the
+        -- factory's invariant #18 — that the claimed input at least covers the amount, so an
+        -- integration calling this choice directly cannot create a receiver holding it hasn't backed.
+        assertMsg "totalInput must cover the transfer amount"
+          (totalInput >= amount)
         -- Check expiry if set
         now <- getTime
         case expiresAt of

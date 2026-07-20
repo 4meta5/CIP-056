@@ -360,6 +360,7 @@ test_preapprovalZeroAmount = do
   submitMultiMustFail [registry.admin, alice] [] $
     exerciseCmd preapprovalCid TransferPreapproval_Send with
       sender = alice
+      expectedReceiver = bob  -- matches the preapproval; failure is on amount, not receiver (56-4)
       transferInstrumentId = registry.instrumentId
       amount = 0.0
       totalInput = 100.0

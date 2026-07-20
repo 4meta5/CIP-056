@@ -1,5 +1,12 @@
 -- | Allocation for DvP settlement.
 -- SimpleAllocation: backed by a locked holding, supports execute/cancel/withdraw.
+--
+-- SCOPE (56-Q1): there is no on-ledger settlement coordinator by design. Atomic multi-leg DvP is
+-- achieved by a TRUSTED executor batching each leg's `Allocation_ExecuteTransfer` into a single
+-- transaction — Daml transaction atomicity then guarantees all-or-nothing settlement (see
+-- SimpleToken.Test.Allocation: test_dvpTwoLegs / test_dvpAtomicRollback). Trusting the executor to
+-- assemble and submit all legs is consistent with the centralized/permissioned model this reference
+-- targets; a trust-minimized matching/escrow coordinator is explicitly out of scope.
 module SimpleToken.Allocation where
 
 import Splice.Api.Token.MetadataV1

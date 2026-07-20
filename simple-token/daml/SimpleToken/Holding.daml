@@ -16,7 +16,9 @@ template SimpleHolding
     meta : Metadata
   where
     signatory admin, owner
-    ensure amount > 0.0
+    -- 56-1: bind the holding's admin to the instrument's issuing admin, so a holding cannot
+    -- advertise an instrument it is not backed by (defense-in-depth for integrators/observers).
+    ensure amount > 0.0 && admin == instrumentId.admin
 
     interface instance Holding for SimpleHolding where
       view = HoldingView with
@@ -41,7 +43,8 @@ template LockedSimpleHolding
   where
     signatory admin, owner, lock.holders
     observer extraObservers
-    ensure amount > 0.0
+    -- 56-1: bind the holding's admin to the instrument's issuing admin.
+    ensure amount > 0.0 && admin == instrumentId.admin
 
     -- | Owner can unlock a holding whose lock has expired.
     choice LockedSimpleHolding_Unlock : ContractId SimpleHolding

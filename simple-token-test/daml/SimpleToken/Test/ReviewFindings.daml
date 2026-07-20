@@ -1,0 +1,165 @@
+-- | Regression tests for security findings from the CIP-0056 internal review.
+--
+-- 56-4 (LOW/MEDIUM) — direct-transfer receiver redirect: the preapproval used by the
+--   direct-transfer path comes from untrusted choice context, and nothing bound it to the
+--   transfer's intended receiver. A context supplying a preapproval for a *different*
+--   receiver silently redirected the funds. Fix: TransferPreapproval_Send now takes
+--   `expectedReceiver` and asserts it equals the preapproval's `receiver`.
+--
+-- 56-6 (MEDIUM) — forged-holding supply inflation: `archiveAndSumInputs` trusted the shared
+--   `Holding` interface view of its inputs. A foreign look-alike template could advertise a
+--   spoofed view (huge amount, borrowed instrumentId), inflate `totalInput`, and mint a real
+--   backed holding for the fake amount. Fix: inputs must down-cast to one of the registry's
+--   own concrete holding templates (SimpleHolding / LockedSimpleHolding).
+module SimpleToken.Test.ReviewFindings where
+
+import DA.TextMap qualified as TextMap
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1
+import Splice.Api.Token.TransferInstructionV1
+
+import SimpleToken.Holding
+import SimpleToken.Rules
+import SimpleToken.Preapproval
+import SimpleToken.ContextUtils
+import SimpleToken.Testing.SimpleRegistry
+import SimpleToken.Testing.WalletClient
+import SimpleToken.Test.Setup
+
+import Daml.Script
+
+-- | A foreign template that implements the standard `Holding` interface but is NOT issued by
+-- the registry. It advertises an attacker-controlled view — the "look-alike" of finding 56-6.
+template EvilHolding
+  with
+    attacker : Party
+    spoofedInstrumentId : InstrumentId
+    spoofedAmount : Decimal
+  where
+    signatory attacker
+    interface instance Holding for EvilHolding where
+      view = HoldingView with
+        owner = attacker
+        instrumentId = spoofedInstrumentId
+        amount = spoofedAmount
+        lock = None
+        meta = emptyMetadata
+
+-- Test (56-4): a direct transfer addressed to `charlie` must not be redirected to `bob` by a
+-- choice context that supplies bob's preapproval. With the receiver binding it fails closed.
+test_directTransferReceiverRedirectRejected : Script ()
+test_directTransferReceiverRedirectRejected = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice      -- sender
+      bob = parties.bob          -- receiver of the (wrong) preapproval supplied via context
+      charlie = parties.charlie  -- the transfer's intended receiver
+  [h1] <- fundParty registry alice 100.0
+  -- A preapproval exists for bob only; charlie has none.
+  bobPreapprovalCid <- createPreapproval registry bob None
+  -- Honest transfer is addressed to charlie...
+  let transfer = Transfer with
+        sender = alice
+        receiver = charlie
+        amount = 50.0
+        instrumentId = registry.instrumentId
+        requestedAt = demoTime
+        executeBefore = futureDeadline
+        inputHoldingCids = [h1]
+        meta = emptyMetadata
+  -- ...but a malicious choice context injects bob's preapproval cid.
+  [(rulesCid, _)] <- query @SimpleTokenRules registry.admin
+  let tfCid = toInterfaceContractId @TransferFactory rulesCid
+  rulesDisc <- queryDisc @SimpleTokenRules registry.admin rulesCid
+  bobDisc <- queryDisc @TransferPreapproval registry.admin bobPreapprovalCid
+  let ctx = ChoiceContext with
+        values = TextMap.fromList
+          [(transferPreapprovalContextKey, AV_ContractId (coerceContractId bobPreapprovalCid))]
+  -- Must fail: preapproval.receiver (bob) /= transfer.receiver (charlie).
+  submitWithDiscMustFail alice (rulesDisc <> bobDisc) $
+    exerciseCmd tfCid TransferFactory_Transfer with
+      expectedAdmin = registry.admin
+      transfer
+      extraArgs = ExtraArgs with context = ctx; meta = emptyMetadata
+
+-- Test (56-6): a foreign look-alike holding must be rejected as a transfer input. Otherwise a
+-- self-transfer would archive it and mint a real backed holding for the spoofed amount.
+test_forgedHoldingInputRejected : Script ()
+test_forgedHoldingInputRejected = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  -- Attacker mints a look-alike advertising 1,000,000 of the real instrument.
+  evilCid <- submit alice $ createCmd EvilHolding with
+    attacker = alice
+    spoofedInstrumentId = registry.instrumentId
+    spoofedAmount = 1000000.0
+  let evilHoldingCid = toInterfaceContractId @Holding evilCid
+  let transfer = Transfer with
+        sender = alice
+        receiver = alice  -- self-transfer: would mint a backed 1,000,000 holding from thin air
+        amount = 1000000.0
+        instrumentId = registry.instrumentId
+        requestedAt = demoTime
+        executeBefore = futureDeadline
+        inputHoldingCids = [evilHoldingCid]
+        meta = emptyMetadata
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  -- Must fail: EvilHolding is not one of the registry's own holding templates.
+  submitWithDiscMustFail alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+
+-- Positive control: an equivalent transfer backed by a *real* registry holding still works,
+-- so the 56-6 gate rejects only foreign templates, not legitimate inputs.
+test_genuineHoldingInputStillWorks : Script ()
+test_genuineHoldingInputStillWorks = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+  [h1] <- fundParty registry alice 1000000.0
+  let transfer = Transfer with
+        sender = alice
+        receiver = alice
+        amount = 1000000.0
+        instrumentId = registry.instrumentId
+        requestedAt = demoTime
+        executeBefore = futureDeadline
+        inputHoldingCids = [h1]
+        meta = emptyMetadata
+  enriched <- getTransferFactory registry transfer emptyExtraArgs
+  result <- submitWithDisc alice enriched.disclosures $
+    exerciseCmd enriched.factoryCid enriched.arg
+  case result.output of
+    TransferInstructionResult_Completed _ -> pure ()
+    _ -> fail "Expected Completed for a genuine registry holding"
+  checkBalance alice registry.instrumentId 1000000.0
+
+-- Test (56-1): a holding whose admin is not the instrument's issuing admin cannot be created.
+test_holdingAdminMustMatchInstrumentAdmin : Script ()
+test_holdingAdminMustMatchInstrumentAdmin = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      charlie = parties.charlie
+  -- instrumentId.admin (charlie) /= holding admin (registry.admin) -> the ensure must reject it.
+  submitMultiMustFail [registry.admin, alice] [] $ createCmd SimpleHolding with
+    admin = registry.admin
+    owner = alice
+    instrumentId = InstrumentId with admin = charlie; id = "SimpleToken"
+    amount = 100.0
+    meta = emptyMetadata
+
+-- Test (56-3a): TransferPreapproval_Send rejects a totalInput that does not cover the amount
+-- (defense-in-depth for direct callers that bypass the factory's invariant #18).
+test_preapprovalTotalInputMustCoverAmount : Script ()
+test_preapprovalTotalInputMustCoverAmount = do
+  TestEnv{..} <- setupTestEnv
+  let alice = parties.alice
+      bob = parties.bob
+  preapprovalCid <- createPreapproval registry bob None
+  -- Claim only 10 of input while sending 50 -> must fail before any holding is minted.
+  submitMultiMustFail [registry.admin, alice] [] $
+    exerciseCmd preapprovalCid TransferPreapproval_Send with
+      sender = alice
+      expectedReceiver = bob
+      transferInstrumentId = registry.instrumentId
+      amount = 50.0
+      totalInput = 10.0
+      holdingMeta = emptyMetadata
