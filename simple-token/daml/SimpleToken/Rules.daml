@@ -176,6 +176,16 @@ archiveAndSumInputs : Party -> InstrumentId -> [ContractId Holding] -> Update De
 archiveAndSumInputs sender expectedInstrumentId holdingCids = do
   amounts <- forA holdingCids $ \holdingCid -> do
     holdingI <- fetch holdingCid
+    -- 56-6: reject foreign look-alike holdings. `holdingCid` is the shared Holding
+    -- interface, so a malicious template could advertise a spoofed HoldingView (inflated
+    -- amount / borrowed instrumentId) and inflate totalInput -> unbacked mint. Require the
+    -- input to be one of our own concrete holding templates before trusting its view.
+    let isOwnHolding = case fromInterface @SimpleHolding holdingI of
+          Some _ -> True
+          None -> case fromInterface @LockedSimpleHolding holdingI of
+            Some _ -> True
+            None -> False
+    assertMsg "Input holding is not a recognized SimpleToken holding template" isOwnHolding
     let hv = view holdingI
     -- Invariant #10: input owner == sender
     assertMsg "Input holding owner does not match sender"
@@ -230,9 +240,12 @@ selfTransfer admin transfer totalInput meta = do
 -- The preapproval choice creates the receiver holding (needs receiver auth from preapproval signatories).
 directTransfer : Party -> Transfer -> Decimal -> ContractId TransferPreapproval -> Metadata -> Update TransferInstructionResult
 directTransfer admin transfer totalInput preapprovalCid meta = do
-  -- Exercise nonconsuming send on preapproval (validates instrumentId match - invariant #16)
+  -- Exercise nonconsuming send on preapproval.
+  -- Validates instrumentId match (invariant #16) and, since the preapproval cid comes from
+  -- untrusted choice context, that its receiver == transfer.receiver (56-4).
   (receiverHoldingCids, senderChangeCids) <- exercise preapprovalCid TransferPreapproval_Send with
     sender = transfer.sender
+    expectedReceiver = transfer.receiver
     transferInstrumentId = transfer.instrumentId
     amount = transfer.amount
     totalInput

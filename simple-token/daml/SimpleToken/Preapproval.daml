@@ -26,12 +26,18 @@ template TransferPreapproval
     nonconsuming choice TransferPreapproval_Send : ([ContractId Holding], [ContractId Holding])
       with
         sender : Party
+        expectedReceiver : Party
         transferInstrumentId : InstrumentId
         amount : Decimal
         totalInput : Decimal
         holdingMeta : Metadata
       controller admin, sender
       do
+        -- 56-4: bind this preapproval to the transfer's intended receiver.
+        -- The preapproval cid is supplied via untrusted choice context; without this
+        -- check a preapproval for a different receiver would silently redirect the funds.
+        assertMsg "Preapproval receiver does not match transfer receiver"
+          (receiver == expectedReceiver)
         -- Invariant #16: preapproval.instrumentId == transfer.instrumentId
         assertMsg "Preapproval instrumentId does not match transfer instrumentId"
           (instrumentId == transferInstrumentId)
